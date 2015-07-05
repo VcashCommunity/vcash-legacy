@@ -37,13 +37,14 @@ namespace coin {
 class alert;
 class block;
 class transaction;
+class zerotime_lock;
 
 namespace protocol {
 
         /**
          * The version.
          */
-        enum { version = 60033 };
+        enum { version = 60034 };
 
         /**
          * The minimum version.
@@ -623,6 +624,7 @@ namespace protocol {
             "ERROR",
             "tx",
             "block",
+            "ztlock",
         };
     
         /** Message Structures */
@@ -730,6 +732,14 @@ namespace protocol {
         {
             std::shared_ptr<alert> a;
         } alert_t;
+    
+        /**
+         * The ztlock structure.
+         */
+        typedef struct
+        {
+            std::shared_ptr<zerotime_lock> ztlock;
+        } ztlock_t;
 
         /**
          * The maximum inventory size.

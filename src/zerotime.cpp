@@ -25,6 +25,8 @@
 
 using namespace coin;
 
+std::mutex zerotime::mutex_;
+
 zerotime & zerotime::instance()
 {
     static zerotime g_zerotime;
@@ -50,6 +52,8 @@ std::map<sha256, zerotime_lock> & zerotime::locks()
 
 bool zerotime::has_lock_conflict(const transaction & tx)
 {
+    std::lock_guard<std::recursive_mutex> l1(recursive_mutex_locked_inputs_);
+    
     for (auto & i : tx.transactions_in())
     {
         if (m_locked_inputs.count(i.previous_out()) > 0)
@@ -74,7 +78,14 @@ void zerotime::clear_expired_input_locks()
 
     while (it != m_locks.end())
     {
-        if (time::instance().get_adjusted() > it->second.expiration())
+        /**
+         * Remove locks that are either expired or have an invalid expiration.
+         */
+        if (
+            time::instance().get_adjusted() > it->second.expiration() ||
+            it->second.expiration() - time::instance().get_adjusted() >
+            zerotime_lock::interval_max_expire
+            )
         {
             log_info(
                 "ZeroTime is removing expired transaction lock " <<

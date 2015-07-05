@@ -63,6 +63,7 @@
 #include <coin/upnp_client.hpp>
 #include <coin/wallet.hpp>
 #include <coin/wallet_manager.hpp>
+#include <coin/zerotime_manager.hpp>
 
 using namespace coin;
 
@@ -1231,6 +1232,19 @@ void stack_impl::start()
             m_upnp_client->start();
             
             /**
+             * Allocate the zerotime_manager.
+             */
+            m_zerotime_manager.reset(new zerotime_manager(
+                globals::instance().io_service(),
+                globals::instance().strand(), *this)
+            );
+            
+            /**
+             * Start the zerotime_manager.
+             */
+            m_zerotime_manager->start();
+            
+            /**
              * Allocate the status.
              */
             std::map<std::string, std::string> status;
@@ -1299,7 +1313,9 @@ void stack_impl::start()
             if (m_configuration.network_udp_enable() == true)
             {
                 m_database_stack->start(
-                    tcp_port, globals::instance().is_client()
+                    tcp_port,
+                    globals::instance().operation_mode() ==
+                    protocol::operation_mode_client
                 );
             }
             
@@ -1511,6 +1527,14 @@ void stack_impl::stop()
     }
     
     /**
+     * Stop the zerotime_manager.
+     */
+    if (m_zerotime_manager)
+    {
+        m_zerotime_manager->stop();
+    }
+    
+    /**
      * Stop the status_manager.
      */
     m_status_manager->stop();
@@ -1623,6 +1647,11 @@ void stack_impl::stop()
      * Reset
      */
     m_nat_pmp_client.reset();
+    
+    /**
+     * Reset
+     */
+    m_zerotime_manager.reset();
     
     /**
      * Reset
@@ -2832,6 +2861,11 @@ std::shared_ptr<alert_manager> & stack_impl::get_alert_manager()
     return m_alert_manager;
 }
 
+std::shared_ptr<database_stack> & stack_impl::get_database_stack()
+{
+    return m_database_stack;
+}
+
 std::shared_ptr<mining_manager> & stack_impl::get_mining_manager()
 {
     return m_mining_manager;
@@ -2851,6 +2885,11 @@ std::shared_ptr<tcp_connection_manager> &
     stack_impl::get_tcp_connection_manager()
 {
     return m_tcp_connection_manager;
+}
+
+std::shared_ptr<zerotime_manager> & stack_impl::get_zerotime_manager()
+{
+    return m_zerotime_manager;
 }
 
 std::shared_ptr<db_env> & stack_impl::get_db_env()

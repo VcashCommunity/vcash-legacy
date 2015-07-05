@@ -18,25 +18,30 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef COIN_STATUS_MANAGER_HPP
-#define COIN_STATUS_MANAGER_HPP
+#ifndef COIN_ZEROTIME_MANAGER_HPP
+#define COIN_ZEROTIME_MANAGER_HPP
 
 #include <cstdint>
+#include <ctime>
 #include <map>
-#include <mutex>
-#include <string>
 #include <vector>
 
 #include <boost/asio.hpp>
+
+#include <coin/sha256.hpp>
+#include <coin/transaction_in.hpp>
+#include <coin/zerotime_answer.hpp>
+#include <coin/zerotime_question.hpp>
 
 namespace coin {
 
     class stack_impl;
     
     /**
-     * Implements a status manager.
+     * Implements a ZeroTime manager.
      */
-    class status_manager : public std::enable_shared_from_this<status_manager>
+    class zerotime_manager
+        : public std::enable_shared_from_this<zerotime_manager>
     {
         public:
         
@@ -46,7 +51,7 @@ namespace coin {
              * @param s The boost::asio::strand.
              * @param owner The stack_impl.
              */
-            status_manager(
+            zerotime_manager(
                 boost::asio::io_service & ios, boost::asio::strand & s,
                 stack_impl & owner
             );
@@ -62,17 +67,42 @@ namespace coin {
             void stop();
         
             /**
-             * Inserts status pairs.
-             * @param pairs The pairs.
+             * Starts probing the network for answers.
+             * @param hash_tx The transaction hash.
+             * @param transactions_in The transaction_in's.
              */
-            void insert(const std::map<std::string, std::string> & pairs);
+            void probe_for_answers(
+                const sha256 & hash_tx,
+                const std::vector<transaction_in> & transactions_in
+            );
         
         private:
         
             /**
-             * The timer callback interval in milliseconds.
+             * The answers (we've received over TCP) under key question.
              */
-            enum { interval_callback = 1 };
+            std::map<sha256, std::vector< std::pair<
+                boost::asio::ip::tcp::endpoint, zerotime_answer> > >
+                m_answers_tcp
+            ;
+        
+            /**
+             * The questions (that we've asked) under key answer.
+             */
+            std::map<sha256, zerotime_question> m_questions;
+        
+            /**
+             * A map of the times of which questions and all related answers
+             * are to be expired.
+             */
+            std::map<sha256, std::time_t> m_qa_expire_times;
+        
+            /**
+             * The questioned endpoints.
+             */
+            std::map<
+                sha256, std::vector<boost::asio::ip::tcp::endpoint>
+            > m_questioned_tcp_endpoints;
         
         protected:
         
@@ -103,18 +133,8 @@ namespace coin {
             boost::asio::basic_waitable_timer<
                 std::chrono::steady_clock
             > timer_;
-        
-            /**
-             * The std::mutex
-             */
-            std::mutex mutex_;
-        
-            /**
-             * The pairs.
-             */
-            std::vector< std::map<std::string, std::string> > pairs_;
     };
-
+    
 } // namespace coin
 
-#endif // COIN_STATUS_MANAGER_HPP
+#endif // COIN_ZEROTIME_MANAGER_HPP

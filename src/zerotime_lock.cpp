@@ -18,13 +18,15 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <cassert>
+
 #include <coin/time.hpp>
 #include <coin/zerotime_lock.hpp>
 
 using namespace coin;
 
 zerotime_lock::zerotime_lock()
-    : m_expiration(time::instance().get_adjusted() + (20 * 60))
+    : m_expiration(time::instance().get_adjusted() + interval_min_expire)
 {
     set_null();
 }
@@ -37,17 +39,9 @@ void zerotime_lock::encode()
 void zerotime_lock::encode(data_buffer & buffer)
 {
     /**
-     * Encode the m_transactions_in size.
+     * Encode the transaction.
      */
-    buffer.write_var_int(m_transactions_in.size());
-    
-    /**
-     * Encode the m_transactions_in.
-     */
-    for (auto & i : m_transactions_in)
-    {
-        i.encode(buffer);
-    }
+    m_transaction.encode(buffer);
     
     /**
      * Encode the transaction hash.
@@ -83,28 +77,10 @@ bool zerotime_lock::decode()
 bool zerotime_lock::decode(data_buffer & buffer)
 {
     /**
-     * Read the number of transactions in.
+     * Decode the transaction.
      */
-    auto number_transactions_in = buffer.read_var_int();
-    
-    for (auto i = 0; i < number_transactions_in; i++)
-    {
-        /**
-         * Allocate the transaction_in.
-         */
-        transaction_in tx_in;
-        
-        /**
-         * Decode the transaction_in.
-         */
-        tx_in.decode(buffer);
+    m_transaction.decode(buffer);
 
-        /**
-         * Retain the transaction_in.
-         */
-        m_transactions_in.push_back(tx_in);
-    }
-    
     /**
      * Decode the transaction hash.
      */
@@ -112,10 +88,23 @@ bool zerotime_lock::decode(data_buffer & buffer)
         reinterpret_cast<char *> (m_hash_tx.digest()), sha256::digest_length
     );
     
+    assert(m_transaction.get_hash() == m_hash_tx);
+    
     /**
      * Decode the expiration.
      */
     m_expiration = buffer.read_uint64();
+
+    /**
+     * Enforce the expiration.
+     */
+    if (
+        m_expiration < time::instance().get_adjusted() + interval_min_expire ||
+        m_expiration > time::instance().get_adjusted() + interval_max_expire
+        )
+    {
+        m_expiration = time::instance().get_adjusted() + interval_min_expire;
+    }
     
     /**
      * Decode the signature length.
@@ -134,20 +123,30 @@ bool zerotime_lock::decode(data_buffer & buffer)
         );
     }
     
-    return true;
+    return m_transaction.get_hash() == m_hash_tx;
 }
 
 void zerotime_lock::set_null()
 {
-    m_transactions_in.clear();
+    m_transaction.set_null();
     m_hash_tx.clear();
-    m_expiration = time::instance().get_adjusted() + (20 * 60);
+    m_expiration = time::instance().get_adjusted() + interval_min_expire;
     m_signature.clear();
+}
+
+void zerotime_lock::set_transaction(const transaction & val)
+{
+    m_transaction = val;
 }
 
 const std::vector<transaction_in> & zerotime_lock::transactions_in() const
 {
-    return m_transactions_in;
+    return m_transaction.transactions_in();
+}
+
+void zerotime_lock::set_hash_tx(const sha256 & val)
+{
+    m_hash_tx = val;
 }
 
 const sha256 & zerotime_lock::hash_tx() const

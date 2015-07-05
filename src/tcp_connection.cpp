@@ -42,6 +42,8 @@
 #include <coin/time.hpp>
 #include <coin/utility.hpp>
 #include <coin/wallet_manager.hpp>
+#include <coin/zerotime.hpp>
+#include <coin/zerotime_lock.hpp>
 
 using namespace coin;
 
@@ -1141,6 +1143,42 @@ void tcp_connection::send_tx_message(const transaction & tx)
     }
 }
 
+void tcp_connection::send_ztlock_message(const zerotime_lock & ztlock)
+{
+    if (auto t = m_tcp_transport.lock())
+    {
+        /**
+         * Allocate the message.
+         */
+        message msg("ztlock");
+
+        /**
+         * Set the tx.
+         */
+        msg.protocol_ztlock().ztlock = std::make_shared<zerotime_lock> (ztlock);
+        
+        log_debug(
+            "TCP connection is sending ztlock " <<
+            msg.protocol_ztlock().ztlock->hash_tx().to_string().substr(0, 20) <<
+            "."
+        );
+
+        /**
+         * Encode the message.
+         */
+        msg.encode();
+        
+        /**
+         * Write the message.
+         */
+        t->write(msg.data(), msg.size());
+    }
+    else
+    {
+        stop();
+    }
+}
+
 void tcp_connection::send_mempool_message()
 {
     if (auto t = m_tcp_transport.lock())
@@ -2108,6 +2146,26 @@ bool tcp_connection::handle_message(message & msg)
                                 send_tx_message(tx);
                             }
                         }
+                        
+                        if (
+                            did_send == false &&
+                            i.type() == inventory_vector::type_msg_ztlock
+                            )
+                        {
+                            if (
+                                zerotime::instance().locks().count(i.hash()) > 0
+                                )
+                            {
+                                auto ztlock =
+                                    zerotime::instance().locks()[i.hash()]
+                                ;
+
+                                /**
+                                 * Send the ztlock message.
+                                 */
+                                send_ztlock_message(ztlock);
+                            }
+                        }
                     }
                     
                     /**
@@ -2354,132 +2412,141 @@ bool tcp_connection::handle_message(message & msg)
 
         const auto & tx = msg.protocol_tx().tx;
         
-        std::vector<sha256> queue_work;
-        std::vector<sha256> queue_erase;
-        
-        db_tx txdb("r");
-
-        /**
-         * Allocate the inventory_vector.
-         */
-        inventory_vector inv(inventory_vector::type_msg_tx, tx->get_hash());
-        
-        /**
-         * Add to the inventory_cache.
-         */
-        inventory_cache_.insert(inv);
-        
-        bool missing_inputs = false;
-        
-        data_buffer buffer;
-        
-        tx->encode(buffer);
-        
-        if (tx->accept_to_transaction_pool(txdb, &missing_inputs).first)
+        if (tx)
         {
+            std::vector<sha256> queue_work;
+            std::vector<sha256> queue_erase;
+            
+            db_tx txdb("r");
+
             /**
-             * Inform the wallet_manager.
+             * Allocate the inventory_vector.
              */
-            wallet_manager::instance().sync_with_wallets(*tx, 0, true);
+            inventory_vector inv(inventory_vector::type_msg_tx, tx->get_hash());
+            
+            std::lock_guard<std::mutex> l2(mutex_inventory_cache_);
             
             /**
-             * Relay the inv.
+             * Add to the inventory_cache.
              */
-            relay_inv(inv, buffer);
-
-            queue_work.push_back(inv.hash());
-            queue_erase.push_back(inv.hash());
-
-            /**
-             * Recursively process any orphan transactions that depended on
-             * this one.
-             */
-            for (auto i = 0; i < queue_work.size(); i++)
+            inventory_cache_.insert(inv);
+            
+            bool missing_inputs = false;
+            
+            data_buffer buffer;
+            
+            tx->encode(buffer);
+            
+            if (tx->accept_to_transaction_pool(txdb, &missing_inputs).first)
             {
-                auto hash_previous = queue_work[i];
-
-                auto it = globals::instance().orphan_transactions_by_previous()[
-                    hash_previous].begin()
-                ;
+                /**
+                 * Inform the wallet_manager.
+                 */
+                wallet_manager::instance().sync_with_wallets(*tx, 0, true);
                 
-                for (
-                    ;
-                    it != globals::instance().orphan_transactions_by_previous()[
-                    hash_previous].end();
-                    ++it
-                    )
+                /**
+                 * Relay the inv.
+                 */
+                relay_inv(inv, buffer);
+
+                queue_work.push_back(inv.hash());
+                queue_erase.push_back(inv.hash());
+
+                /**
+                 * Recursively process any orphan transactions that depended on
+                 * this one.
+                 */
+                for (auto i = 0; i < queue_work.size(); i++)
                 {
-                    data_buffer buffer2(it->second->data(), it->second->size());
-                    
-                    transaction tx2;
-                    
-                    tx2.decode(buffer2);
-                    
-                    inventory_vector inv2(
-                        inventory_vector::type_msg_tx, tx2.get_hash()
-                    );
-                    
-                    bool missing_inputs2 = false;
+                    auto hash_previous = queue_work[i];
 
-                    if (
-                        tx2.accept_to_transaction_pool(txdb,
-                        &missing_inputs2).first
+                    auto it = globals::instance(
+                        ).orphan_transactions_by_previous()[
+                        hash_previous].begin()
+                    ;
+                    
+                    for (
+                        ;
+                        it != globals::instance(
+                        ).orphan_transactions_by_previous()[
+                        hash_previous].end();
+                        ++it
                         )
                     {
-                        log_debug(
-                            "TCP connection accepted orphan transaction " <<
-                            inv2.hash().to_string().substr(0, 10) << "."
-                        )
-                        /**
-                         * Inform the wallet_manager.
-                         */
-                        wallet_manager::instance().sync_with_wallets(
-                            tx2, 0, true
+                        data_buffer buffer2(
+                            it->second->data(), it->second->size()
                         );
+                        
+                        transaction tx2;
+                        
+                        tx2.decode(buffer2);
+                        
+                        inventory_vector inv2(
+                            inventory_vector::type_msg_tx, tx2.get_hash()
+                        );
+                        
+                        bool missing_inputs2 = false;
 
-                        relay_inv(inv2, buffer2);
-                        
-                        queue_work.push_back(inv2.hash());
-                        queue_erase.push_back(inv2.hash());
-                    }
-                    else if (missing_inputs2 == false)
-                    {
-                        /**
-                         * Invalid orphan.
-                         */
-                        queue_erase.push_back(inv2.hash());
-                        
-                        log_debug(
-                            "TCP connection removed invalid orphan "
-                            "transaction " <<
-                            inv2.hash().to_string().substr(0, 10) << "."
-                        );
+                        if (
+                            tx2.accept_to_transaction_pool(txdb,
+                            &missing_inputs2).first
+                            )
+                        {
+                            log_debug(
+                                "TCP connection accepted orphan transaction " <<
+                                inv2.hash().to_string().substr(0, 10) << "."
+                            )
+                            /**
+                             * Inform the wallet_manager.
+                             */
+                            wallet_manager::instance().sync_with_wallets(
+                                tx2, 0, true
+                            );
+
+                            relay_inv(inv2, buffer2);
+                            
+                            queue_work.push_back(inv2.hash());
+                            queue_erase.push_back(inv2.hash());
+                        }
+                        else if (missing_inputs2 == false)
+                        {
+                            /**
+                             * Invalid orphan.
+                             */
+                            queue_erase.push_back(inv2.hash());
+                            
+                            log_debug(
+                                "TCP connection removed invalid orphan "
+                                "transaction " <<
+                                inv2.hash().to_string().substr(0, 10) << "."
+                            );
+                        }
                     }
                 }
-            }
 
-            for (auto & i : queue_erase)
-            {
-                utility::erase_orphan_tx(i);
+                for (auto & i : queue_erase)
+                {
+                    utility::erase_orphan_tx(i);
+                }
             }
-        }
-        else if (missing_inputs)
-        {
-            utility::add_orphan_tx(buffer);
-
-            /**
-             * Limit the size of the orphan transactions.
-             */
-            auto evicted = utility::limit_orphan_tx_size(
-                constants::max_orphan_transactions
-            );
-            
-            if (evicted > 0)
+            else if (missing_inputs)
             {
-                log_debug(
-                    "TCP connection orphans overflow, evicted = " <<
-                    evicted << "."
+                utility::add_orphan_tx(buffer);
+
+                /**
+                 * Limit the size of the orphan transactions.
+                 */
+                auto evicted = utility::limit_orphan_tx_size(
+                    constants::max_orphan_transactions
                 );
+                
+                if (evicted > 0)
+                {
+                    log_debug(
+                        "TCP connection orphans overflow, evicted = " <<
+                        evicted << "."
+                    );
+                }
             }
         }
     }
@@ -2526,6 +2593,92 @@ bool tcp_connection::handle_message(message & msg)
                 /**
                  * The inv as been fulfilled.
                  */
+            }
+        }
+    }
+    else if (msg.header().command == "ztlock")
+    {
+        log_debug("Got ztlock");
+
+        if (globals::instance().is_zerotime_enabled())
+        {
+            const auto & ztlock = msg.protocol_ztlock().ztlock;
+
+            if (ztlock)
+            {
+                /**
+                 * Allocate the inventory_vector.
+                 */
+                inventory_vector inv(
+                    inventory_vector::type_msg_ztlock, ztlock->hash_tx()
+                );
+                
+                std::lock_guard<std::mutex> l2(mutex_inventory_cache_);
+                
+                /**
+                 * Add to the inventory_cache.
+                 */
+                inventory_cache_.insert(inv);
+
+                /**
+                 * Check that the zerotime lock is not expired.
+                 */
+                if (time::instance().get_adjusted() > ztlock->expiration())
+                {
+                    /**
+                     * Check if we already have this zerotime lock.
+                     */
+                    if (
+                        zerotime::instance().locks().count(
+                        ztlock->hash_tx()) > 0
+                        )
+                    {
+                        // ...
+                    }
+                    else
+                    {
+                        /**
+                         * Alllocate the buffer for relaying.
+                         */
+                        data_buffer buffer;
+                    
+                        /**
+                         * Encode the zerotime_lock.
+                         */
+                        ztlock->encode(buffer);
+                        
+                        /**
+                         * Relay the inv.
+                         */
+                        relay_inv(inv, buffer);
+                        
+                        /**
+                         * :TODO: If any voting or storage, do it here.
+                         */
+
+                        log_info(
+                            "TCP connection is adding ZeroTime lock " <<
+                            ztlock->hash_tx().to_string() << "."
+                        );
+                        
+                        /**
+                         * Insert the zerotime_lock.
+                         */
+                        zerotime::instance().locks().insert(
+                            std::make_pair(ztlock->hash_tx(), *ztlock)
+                        );
+                        
+                        /**
+                         * Lock the inputs.
+                         */
+                        for (auto & i : ztlock->transactions_in())
+                        {
+                            zerotime::instance().locked_inputs()[
+                                i.previous_out()] = ztlock->hash_tx()
+                            ;
+                        }
+                    }
+                }
             }
         }
     }

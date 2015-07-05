@@ -55,6 +55,7 @@ namespace coin {
     class tcp_connection;
     class tcp_connection_manager;
     class upnp_client;
+    class zerotime_manager;
     
     /**
      * The stack implementation.
@@ -209,6 +210,11 @@ namespace coin {
             std::shared_ptr<alert_manager> & get_alert_manager();
         
             /**
+             * The database_stack.
+             */
+            std::shared_ptr<database_stack> & get_database_stack();
+        
+            /**
              * The mining_manager.
              */
             std::shared_ptr<mining_manager> & get_mining_manager();
@@ -229,6 +235,11 @@ namespace coin {
             std::shared_ptr<tcp_connection_manager> &
                 get_tcp_connection_manager()
             ;
+        
+            /**
+             * The zerotime_manager.
+             */
+            std::shared_ptr<zerotime_manager> & get_zerotime_manager();
         
             /**
              * The db_env
@@ -392,6 +403,11 @@ namespace coin {
              * The upnp_client.
              */
             std::shared_ptr<upnp_client> m_upnp_client;
+        
+            /**
+             * The zerotime_manager.
+             */
+            std::shared_ptr<zerotime_manager> m_zerotime_manager;
         
             /**
              * The db_env

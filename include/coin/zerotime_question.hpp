@@ -18,41 +18,26 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef COIN_ZEROTIME_LOCK_HPP
-#define COIN_ZEROTIME_LOCK_HPP
-
-#include <cstdint>
-#include <ctime>
-#include <vector>
+#ifndef COIN_ZEROTIME_QUESTION_HPP
+#define COIN_ZEROTIME_QUESTION_HPP
 
 #include <coin/data_buffer.hpp>
-#include <coin/sha256.hpp>
-#include <coin/transaction.hpp>
 #include <coin/transaction_in.hpp>
 
 namespace coin {
 
     /**
-     * Implements a ZeroTime lock.
+     * Implements a ZeroTime question message (ztquestion).
      */
-    class zerotime_lock : public data_buffer
+    class zerotime_question : public data_buffer
     {
         public:
         
             /**
-             * The minimum expire interval.
-             */
-            enum { interval_min_expire = 20 * 60 };
-        
-            /**
-             * The maximum expire interval.
-             */
-            enum { interval_max_expire = 60 * 60 };
-            
-            /**
              * Constructor
+             * @param tx_in The transaction_in.
              */
-            zerotime_lock();
+            explicit zerotime_question(const transaction_in & tx_in);
         
             /**
              * Encodes
@@ -82,52 +67,16 @@ namespace coin {
             void set_null();
         
             /**
-             * Set the transaction.
-             * @param val The transaction.
+             * The transaction_in.
              */
-            void set_transaction(const transaction & val);
-        
-            /**
-             * The transactions in.
-             */
-            const std::vector<transaction_in> & transactions_in() const;
-        
-            /**
-             * Sets the transaction hash.
-             */
-            void set_hash_tx(const sha256 & val);
-        
-            /**
-             * The transaction hash.
-             */
-            const sha256 & hash_tx() const;
-        
-            /**
-             *  The expiration.
-             */
-            const std::time_t & expiration() const;
+            const transaction_in & get_transaction_in() const;
         
         private:
         
             /**
-             * The transaction.
+             * The transaction_in.
              */
-            transaction m_transaction;
-        
-            /**
-             * The transaction hash.
-             */
-            sha256 m_hash_tx;
-        
-            /**
-             *  The expiration.
-             */
-            std::time_t m_expiration;
-        
-            /**
-             * The signature.
-             */
-            std::vector<std::uint8_t> m_signature;
+            transaction_in m_transaction_in;
         
         protected:
         
@@ -136,4 +85,4 @@ namespace coin {
     
 } // namespace coin
 
-#endif // COIN_ZEROTIME_LOCK_HPP
+#endif // COIN_ZEROTIME_QUESTION_HPP
