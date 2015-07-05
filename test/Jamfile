@@ -93,7 +93,7 @@ project stack
 
 exe stack
     : # sources
-    main.cpp ./..//coin /boost//system 
+    main.cpp ./..//coin ./../database//database /boost//system 
     : <link>static
     : <conditional>@linking
 	: # usage requirements
