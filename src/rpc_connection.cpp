@@ -4253,11 +4253,16 @@ rpc_connection::json_rpc_response_t rpc_connection::json_sendmany(
                 }
                 
                 /**
+                 * Do not use ZeroTime over RPC.
+                 */
+                bool use_zerotime = false;
+                
+                /**
                  * Commit the transaction.
                  */
                 auto ret_pair =
                     globals::instance().wallet_main()->commit_transaction(
-                    wtx, k)
+                    wtx, k, use_zerotime)
                 ;
 
                 if (ret_pair.first == false)
@@ -4447,10 +4452,15 @@ rpc_connection::json_rpc_response_t rpc_connection::json_sendtoaddress(
             }
             else
             {
+                /**
+                 * Do not use ZeroTime over RPC.
+                 */
+                bool use_zerotime = false;
+                
                 auto result =
                     globals::instance().wallet_main(
                     )->send_money_to_destination(
-                    address(address_dest).get(), amount, wtx
+                    address(address_dest).get(), amount, wtx, use_zerotime
                 );
                 
                 if (result.first)

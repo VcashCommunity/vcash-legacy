@@ -126,11 +126,18 @@ void zerotime_manager::handle_answer(
              * Check the number of answers.
              */
             if (
-                zerotime_answers_tcp_[
-                ztanswer.hash_tx()].second.size() == zerotime::confirmations
+                questions_.count(ztanswer.hash_tx()) > 0 &&
+                zerotime_answers_tcp_[ztanswer.hash_tx()].second.size() ==
+                zerotime::confirmations
                 )
             {
-                // :TODO: The transaction is confirmed.
+                /**
+                 * The transaction is confirmed.
+                 */
+                if (m_on_confirmation)
+                {
+                    m_on_confirmation(ztanswer.hash_tx());
+                }
             }
         }
         else
@@ -308,6 +315,12 @@ void zerotime_manager::do_tick_probe(const std::uint32_t & interval)
                          */
                         if (questions_.count(hash_tx) > 0)
                         {
+                            log_info(
+                                "ZeroTime manager is questioning " << ep <<
+                                " regarding transaction " <<
+                                hash_tx.to_string().substr(0, 8) << "."
+                            );
+                            
                             /**
                              * Get the question.
                              */

@@ -1769,13 +1769,36 @@ void stack_impl::send_coins(
              */
             transaction_wallet wtx;
             
-            auto it = wallet_values.find("comment");
+            /**
+             * Check if ZeroTime should be used.
+             */
+            auto use_zerotime = false;
+            
+            auto it = wallet_values.find("zerotime");
+            
+            if (it != wallet_values.end())
+            {
+                use_zerotime = it->second == "1";
+                
+                if (use_zerotime)
+                {
+                    log_info("Stack is sending coins with ZeroTime.");
+                }
+            }
+            
+            /**
+             * Check for a comment.
+             */
+            it = wallet_values.find("comment");
             
             if (it != wallet_values.end())
             {
                 wtx.values()["comment"] = it->second;
             }
             
+            /**
+             * Check for the to.
+             */
             it = wallet_values.find("to");
             
             if (it != wallet_values.end())
@@ -1787,7 +1810,7 @@ void stack_impl::send_coins(
 
             auto ret =
                 globals::instance().wallet_main()->send_money_to_destination(
-                dest_tx, amount, wtx
+                dest_tx, amount, wtx, use_zerotime
             );
             
             if (ret.first)
@@ -3599,9 +3622,25 @@ void stack_impl::load_block_index(
                 assert(blk.header().bits == 504365055);
                 
                 /**
-                 * Set the header nonce.
+                 * The test network uses a different genesis block by using a
+                 * different nonce.
                  */
-                blk.header().nonce = constants::chain_start_time - 10000;
+                if (constants::test_net == true)
+                {
+                    /**
+                     * Set the header nonce.
+                     */
+                    blk.header().nonce =
+                        constants::chain_start_time - 10000 + 1
+                    ;
+                }
+                else
+                {
+                    /**
+                     * Set the header nonce.
+                     */
+                    blk.header().nonce = constants::chain_start_time - 10000;
+                }
 
                 /**
                  * Print the block.

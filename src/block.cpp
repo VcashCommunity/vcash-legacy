@@ -246,7 +246,7 @@ sha256 block::get_hash_genesis()
 sha256 block::get_hash_genesis_test_net()
 {
     static const sha256 ret(
-        "d27872cc9c3fa0a01f73d08b5c52a2dbd62f8f5dabf99f14e2c43f7d174ebeff"
+        "de32fadf1f12e666f783c529e7764d49950541d6571a6080a9242cd7dc595c65"
     );
 
     return ret;
