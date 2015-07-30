@@ -88,6 +88,18 @@
 		1ADAAD521ABFA82A00CB4745 /* gateway.hpp in Headers */ = {isa = PBXBuildFile; fileRef = 1A2D74681A25476500BDDFAF /* gateway.hpp */; };
 		1ADAAD541ABFA82A00CB4745 /* tcp_acceptor.hpp in Headers */ = {isa = PBXBuildFile; fileRef = 1A304CA01925B206002C5FAB /* tcp_acceptor.hpp */; };
 		1ADAAD551ABFA82A00CB4745 /* sha256.hpp in Headers */ = {isa = PBXBuildFile; fileRef = 1A6EA2AD192968C900D5D8C0 /* sha256.hpp */; };
+		E2B0B93A1B65644900CBF088 /* database_stack.cpp in Sources */ = {isa = PBXBuildFile; fileRef = E2B0B9341B65644900CBF088 /* database_stack.cpp */; };
+		E2B0B93B1B65644900CBF088 /* zerotime_answer.cpp in Sources */ = {isa = PBXBuildFile; fileRef = E2B0B9351B65644900CBF088 /* zerotime_answer.cpp */; };
+		E2B0B93C1B65644900CBF088 /* zerotime_lock.cpp in Sources */ = {isa = PBXBuildFile; fileRef = E2B0B9361B65644900CBF088 /* zerotime_lock.cpp */; };
+		E2B0B93D1B65644900CBF088 /* zerotime_manager.cpp in Sources */ = {isa = PBXBuildFile; fileRef = E2B0B9371B65644900CBF088 /* zerotime_manager.cpp */; };
+		E2B0B93E1B65644900CBF088 /* zerotime_question.cpp in Sources */ = {isa = PBXBuildFile; fileRef = E2B0B9381B65644900CBF088 /* zerotime_question.cpp */; };
+		E2B0B93F1B65644900CBF088 /* zerotime.cpp in Sources */ = {isa = PBXBuildFile; fileRef = E2B0B9391B65644900CBF088 /* zerotime.cpp */; };
+		E2B0B9461B65649100CBF088 /* database_stack.hpp in Headers */ = {isa = PBXBuildFile; fileRef = E2B0B9401B65649100CBF088 /* database_stack.hpp */; };
+		E2B0B9471B65649100CBF088 /* zerotime_answer.hpp in Headers */ = {isa = PBXBuildFile; fileRef = E2B0B9411B65649100CBF088 /* zerotime_answer.hpp */; };
+		E2B0B9481B65649100CBF088 /* zerotime_lock.hpp in Headers */ = {isa = PBXBuildFile; fileRef = E2B0B9421B65649100CBF088 /* zerotime_lock.hpp */; };
+		E2B0B9491B65649100CBF088 /* zerotime_manager.hpp in Headers */ = {isa = PBXBuildFile; fileRef = E2B0B9431B65649100CBF088 /* zerotime_manager.hpp */; };
+		E2B0B94A1B65649100CBF088 /* zerotime_question.hpp in Headers */ = {isa = PBXBuildFile; fileRef = E2B0B9441B65649100CBF088 /* zerotime_question.hpp */; };
+		E2B0B94B1B65649100CBF088 /* zerotime.hpp in Headers */ = {isa = PBXBuildFile; fileRef = E2B0B9451B65649100CBF088 /* zerotime.hpp */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -264,6 +276,18 @@
 		1AFB487D193F040E007975BB /* db_wallet.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = db_wallet.cpp; sourceTree = "<group>"; };
 		1AFBD22F19A44BC000B9C70C /* block_locator.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = block_locator.hpp; sourceTree = "<group>"; };
 		1AFBD23019A450BB00B9C70C /* block_locator.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = block_locator.cpp; sourceTree = "<group>"; };
+		E2B0B9341B65644900CBF088 /* database_stack.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = database_stack.cpp; sourceTree = "<group>"; };
+		E2B0B9351B65644900CBF088 /* zerotime_answer.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = zerotime_answer.cpp; sourceTree = "<group>"; };
+		E2B0B9361B65644900CBF088 /* zerotime_lock.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = zerotime_lock.cpp; sourceTree = "<group>"; };
+		E2B0B9371B65644900CBF088 /* zerotime_manager.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = zerotime_manager.cpp; sourceTree = "<group>"; };
+		E2B0B9381B65644900CBF088 /* zerotime_question.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = zerotime_question.cpp; sourceTree = "<group>"; };
+		E2B0B9391B65644900CBF088 /* zerotime.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = zerotime.cpp; sourceTree = "<group>"; };
+		E2B0B9401B65649100CBF088 /* database_stack.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = database_stack.hpp; sourceTree = "<group>"; };
+		E2B0B9411B65649100CBF088 /* zerotime_answer.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = zerotime_answer.hpp; sourceTree = "<group>"; };
+		E2B0B9421B65649100CBF088 /* zerotime_lock.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = zerotime_lock.hpp; sourceTree = "<group>"; };
+		E2B0B9431B65649100CBF088 /* zerotime_manager.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = zerotime_manager.hpp; sourceTree = "<group>"; };
+		E2B0B9441B65649100CBF088 /* zerotime_question.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = zerotime_question.hpp; sourceTree = "<group>"; };
+		E2B0B9451B65649100CBF088 /* zerotime.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = zerotime.hpp; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -306,6 +330,12 @@
 		1A304C77192579A4002C5FAB /* coin */ = {
 			isa = PBXGroup;
 			children = (
+				E2B0B9401B65649100CBF088 /* database_stack.hpp */,
+				E2B0B9411B65649100CBF088 /* zerotime_answer.hpp */,
+				E2B0B9421B65649100CBF088 /* zerotime_lock.hpp */,
+				E2B0B9431B65649100CBF088 /* zerotime_manager.hpp */,
+				E2B0B9441B65649100CBF088 /* zerotime_question.hpp */,
+				E2B0B9451B65649100CBF088 /* zerotime.hpp */,
 				1A0688311A8869EC0076A83A /* account.hpp */,
 				1ABA06741994498900C4D681 /* accounting_entry.hpp */,
 				1A21D8D7195AD126002FA1D6 /* address.hpp */,
@@ -408,6 +438,12 @@
 		1A304C8B192579A4002C5FAB /* src */ = {
 			isa = PBXGroup;
 			children = (
+				E2B0B9341B65644900CBF088 /* database_stack.cpp */,
+				E2B0B9351B65644900CBF088 /* zerotime_answer.cpp */,
+				E2B0B9361B65644900CBF088 /* zerotime_lock.cpp */,
+				E2B0B9371B65644900CBF088 /* zerotime_manager.cpp */,
+				E2B0B9381B65644900CBF088 /* zerotime_question.cpp */,
+				E2B0B9391B65644900CBF088 /* zerotime.cpp */,
 				1A0688321A886A0B0076A83A /* account.cpp */,
 				1ABA0675199454DF00C4D681 /* accounting_entry.cpp */,
 				1A81CCCA195BC73C00603C62 /* address.cpp */,
@@ -497,9 +533,15 @@
 			isa = PBXHeadersBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E2B0B94A1B65649100CBF088 /* zerotime_question.hpp in Headers */,
+				E2B0B94B1B65649100CBF088 /* zerotime.hpp in Headers */,
 				1ADAAD511ABFA82A00CB4745 /* tcp_transport.hpp in Headers */,
+				E2B0B9481B65649100CBF088 /* zerotime_lock.hpp in Headers */,
 				1ADAAD521ABFA82A00CB4745 /* gateway.hpp in Headers */,
+				E2B0B9491B65649100CBF088 /* zerotime_manager.hpp in Headers */,
 				1ADAAD541ABFA82A00CB4745 /* tcp_acceptor.hpp in Headers */,
+				E2B0B9471B65649100CBF088 /* zerotime_answer.hpp in Headers */,
+				E2B0B9461B65649100CBF088 /* database_stack.hpp in Headers */,
 				1ADAAD551ABFA82A00CB4745 /* sha256.hpp in Headers */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -531,7 +573,7 @@
 			isa = PBXProject;
 			attributes = {
 				LastUpgradeCheck = 0510;
-				ORGANIZATIONNAME = coinsy;
+				ORGANIZATIONNAME = Vanillacoin;
 			};
 			buildConfigurationList = 1A304C68192578ED002C5FAB /* Build configuration list for PBXProject "coin" */;
 			compatibilityVersion = "Xcode 3.2";
@@ -556,11 +598,14 @@
 			buildActionMask = 2147483647;
 			files = (
 				1ADAAD001ABFA82A00CB4745 /* globals.cpp in Sources */,
+				E2B0B93A1B65644900CBF088 /* database_stack.cpp in Sources */,
 				1ADAAD011ABFA82A00CB4745 /* point_out.cpp in Sources */,
 				1ADAAD021ABFA82A00CB4745 /* block_index.cpp in Sources */,
 				1ADAAD031ABFA82A00CB4745 /* reward.cpp in Sources */,
 				1ADAAD041ABFA82A00CB4745 /* checkpoint_sync.cpp in Sources */,
 				1ADAAD051ABFA82A00CB4745 /* address_manager.cpp in Sources */,
+				E2B0B93F1B65644900CBF088 /* zerotime.cpp in Sources */,
+				E2B0B93D1B65644900CBF088 /* zerotime_manager.cpp in Sources */,
 				1ADAAD061ABFA82A00CB4745 /* status_manager.cpp in Sources */,
 				1ADAAD071ABFA82A00CB4745 /* checkpoints.cpp in Sources */,
 				1ADAAD081ABFA82A00CB4745 /* rpc_manager.cpp in Sources */,
@@ -571,6 +616,7 @@
 				1ADAAD0D1ABFA82A00CB4745 /* wallet_manager.cpp in Sources */,
 				1ADAAD0E1ABFA82A00CB4745 /* db_env.cpp in Sources */,
 				1ADAAD0F1ABFA82A00CB4745 /* db_tx.cpp in Sources */,
+				E2B0B93B1B65644900CBF088 /* zerotime_answer.cpp in Sources */,
 				1ADAAD101ABFA82A00CB4745 /* tcp_acceptor.cpp in Sources */,
 				1ADAAD111ABFA82A00CB4745 /* script.cpp in Sources */,
 				1ADAAD121ABFA82A00CB4745 /* alert.cpp in Sources */,
@@ -626,6 +672,8 @@
 				1ADAAD461ABFA82A00CB4745 /* alert_manager.cpp in Sources */,
 				1ADAAD471ABFA82A00CB4745 /* key_wallet_master.cpp in Sources */,
 				1ADAAD481ABFA82A00CB4745 /* rpc_json_parser.cpp in Sources */,
+				E2B0B93E1B65644900CBF088 /* zerotime_question.cpp in Sources */,
+				E2B0B93C1B65644900CBF088 /* zerotime_lock.cpp in Sources */,
 				1ADAAD491ABFA82A00CB4745 /* pbkdf2.cpp in Sources */,
 				1ADAAD4A1ABFA82A00CB4745 /* accounting_entry.cpp in Sources */,
 				1ADAAD4B1ABFA82A00CB4745 /* upnp_client.cpp in Sources */,
@@ -719,10 +767,12 @@
 					"$(inherited)",
 					/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/include,
 					../../../include,
+					../../../database/include,
 					../../../deps/boost,
 					../../../deps/db/include,
 					../../../deps/openssl/include,
 				);
+				IPHONEOS_DEPLOYMENT_TARGET = 7.1;
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
 					../../../deps/openssl/lib,
@@ -744,6 +794,7 @@
 					"$(inherited)",
 					/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/include,
 					../../../include,
+					../../../database/include,
 					../../../deps/boost,
 					../../../deps/db/include,
 					../../../deps/openssl/include,
