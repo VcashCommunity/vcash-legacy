@@ -40,6 +40,7 @@ class transaction;
 class zerotime_answer;
 class zerotime_lock;
 class zerotime_question;
+class zerotime_vote;
 
 namespace protocol {
 
@@ -758,6 +759,14 @@ namespace protocol {
         {
             std::shared_ptr<zerotime_answer> ztanswer;
         } ztanswer_t;
+
+        /**
+         * The ztvote structure.
+         */
+        typedef struct
+        {
+            std::shared_ptr<zerotime_vote> ztvote;
+        } ztvote_t;
 
         /**
          * The maximum inventory size.
