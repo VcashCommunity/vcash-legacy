@@ -48,11 +48,6 @@ namespace coin {
              * K
              */
             enum { k = 24 };
-			
-            /**
-             * K test network
-             */
-            enum { k_test_network = 24 };
         
             /**
              * The depth.
