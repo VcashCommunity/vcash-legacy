@@ -45,14 +45,14 @@ namespace coin {
         public:
         
             /**
-             * K
-             */
-            enum { k = 24 };
-			
-            /**
-             * K test network
+             * K for the test network.
              */
             enum { k_test_network = 24 };
+			
+            /**
+             * K
+             */
+            enum { k = 64 };
         
             /**
              * The depth.
