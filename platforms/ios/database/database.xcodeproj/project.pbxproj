@@ -445,7 +445,6 @@
 					../../../deps/boost,
 					../../../deps/openssl/include,
 				);
-				IPHONEOS_DEPLOYMENT_TARGET = 7.1;
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
 					../../../deps/openssl/lib,
