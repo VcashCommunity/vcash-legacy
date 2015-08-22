@@ -18,8 +18,10 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <chrono>
 #include <future>
 #include <sstream>
+#include <thread>
 #include <vector>
 
 #include <boost/asio.hpp>
