@@ -120,7 +120,7 @@ void tcp_connection_manager::handle_accept(
         /**
          * We allow this many incoming connections per same IP address.
          */
-        enum { maximum_per_same_ip = 8 };
+        enum { maximum_per_same_ip = 6 };
 
         auto connections = 0;
         
@@ -192,7 +192,7 @@ void tcp_connection_manager::handle_accept(
             transport->stop();
         }
         else if (
-            m_tcp_connections.size() >=
+            active_tcp_connections() >=
             stack_impl_.get_configuration().network_tcp_inbound_maximum()
             )
         {
@@ -258,6 +258,32 @@ std::map< boost::asio::ip::tcp::endpoint, std::weak_ptr<tcp_connection> > &
     std::lock_guard<std::recursive_mutex> l1(mutex_tcp_connections_);
     
     return m_tcp_connections;
+}
+
+std::size_t tcp_connection_manager::active_tcp_connections()
+{
+    std::size_t ret = 0;
+    
+    std::lock_guard<std::recursive_mutex> l1(mutex_tcp_connections_);
+    
+    for (auto & i : m_tcp_connections)
+    {
+        if (auto connection = i.second.lock())
+        {
+            if (connection->is_transport_valid())
+            {
+                if (auto t = connection->get_tcp_transport().lock())
+                {
+                    if (t->state() == tcp_transport::state_connected)
+                    {
+                        ++ret;
+                    }
+                }
+            }
+        }
+    }
+    
+    return ret;
 }
 
 bool tcp_connection_manager::is_connected()
@@ -682,7 +708,12 @@ bool tcp_connection_manager::is_ip_banned(const std::string & val)
         /**
          * Possible ToR node - Opens TCP connections to all network nodes.
          */
-        {"93.174.95.100", -1}
+        {"93.174.95.100", -1},
+        
+        /**
+         * ??? - Opens TCP connections to all network nodes.
+         */
+        {"113.97.218.52", -1}
     };
     
     if (g_known_attack_ips.count(val) > 0)
