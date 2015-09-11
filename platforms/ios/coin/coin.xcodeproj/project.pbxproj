@@ -90,6 +90,16 @@
 		1ADAAD551ABFA82A00CB4745 /* sha256.hpp in Headers */ = {isa = PBXBuildFile; fileRef = 1A6EA2AD192968C900D5D8C0 /* sha256.hpp */; };
 		D71710511B80DD66000D9019 /* zerotime_vote.hpp in Headers */ = {isa = PBXBuildFile; fileRef = D71710501B80DD66000D9019 /* zerotime_vote.hpp */; };
 		D71710531B80DD8C000D9019 /* zerotime_vote.cpp in Sources */ = {isa = PBXBuildFile; fileRef = D71710521B80DD8C000D9019 /* zerotime_vote.cpp */; };
+		D734B9161BA33022004B16EE /* incentive_answer.hpp in Headers */ = {isa = PBXBuildFile; fileRef = D734B9111BA33022004B16EE /* incentive_answer.hpp */; };
+		D734B9171BA33022004B16EE /* incentive_manager.hpp in Headers */ = {isa = PBXBuildFile; fileRef = D734B9121BA33022004B16EE /* incentive_manager.hpp */; };
+		D734B9181BA33022004B16EE /* incentive_question.hpp in Headers */ = {isa = PBXBuildFile; fileRef = D734B9131BA33022004B16EE /* incentive_question.hpp */; };
+		D734B9191BA33022004B16EE /* incentive_vote.hpp in Headers */ = {isa = PBXBuildFile; fileRef = D734B9141BA33022004B16EE /* incentive_vote.hpp */; };
+		D734B91A1BA33022004B16EE /* incentive.hpp in Headers */ = {isa = PBXBuildFile; fileRef = D734B9151BA33022004B16EE /* incentive.hpp */; };
+		D734B9201BA3308D004B16EE /* incentive_answer.cpp in Sources */ = {isa = PBXBuildFile; fileRef = D734B91B1BA3308D004B16EE /* incentive_answer.cpp */; };
+		D734B9211BA3308D004B16EE /* incentive_manager.cpp in Sources */ = {isa = PBXBuildFile; fileRef = D734B91C1BA3308D004B16EE /* incentive_manager.cpp */; };
+		D734B9221BA3308D004B16EE /* incentive_question.cpp in Sources */ = {isa = PBXBuildFile; fileRef = D734B91D1BA3308D004B16EE /* incentive_question.cpp */; };
+		D734B9231BA3308D004B16EE /* incentive_vote.cpp in Sources */ = {isa = PBXBuildFile; fileRef = D734B91E1BA3308D004B16EE /* incentive_vote.cpp */; };
+		D734B9241BA3308D004B16EE /* incentive.cpp in Sources */ = {isa = PBXBuildFile; fileRef = D734B91F1BA3308D004B16EE /* incentive.cpp */; };
 		E2B0B93A1B65644900CBF088 /* database_stack.cpp in Sources */ = {isa = PBXBuildFile; fileRef = E2B0B9341B65644900CBF088 /* database_stack.cpp */; };
 		E2B0B93B1B65644900CBF088 /* zerotime_answer.cpp in Sources */ = {isa = PBXBuildFile; fileRef = E2B0B9351B65644900CBF088 /* zerotime_answer.cpp */; };
 		E2B0B93C1B65644900CBF088 /* zerotime_lock.cpp in Sources */ = {isa = PBXBuildFile; fileRef = E2B0B9361B65644900CBF088 /* zerotime_lock.cpp */; };
@@ -280,6 +290,16 @@
 		1AFBD23019A450BB00B9C70C /* block_locator.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = block_locator.cpp; sourceTree = "<group>"; };
 		D71710501B80DD66000D9019 /* zerotime_vote.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = zerotime_vote.hpp; sourceTree = "<group>"; };
 		D71710521B80DD8C000D9019 /* zerotime_vote.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = zerotime_vote.cpp; sourceTree = "<group>"; };
+		D734B9111BA33022004B16EE /* incentive_answer.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = incentive_answer.hpp; sourceTree = "<group>"; };
+		D734B9121BA33022004B16EE /* incentive_manager.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = incentive_manager.hpp; sourceTree = "<group>"; };
+		D734B9131BA33022004B16EE /* incentive_question.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = incentive_question.hpp; sourceTree = "<group>"; };
+		D734B9141BA33022004B16EE /* incentive_vote.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = incentive_vote.hpp; sourceTree = "<group>"; };
+		D734B9151BA33022004B16EE /* incentive.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = incentive.hpp; sourceTree = "<group>"; };
+		D734B91B1BA3308D004B16EE /* incentive_answer.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = incentive_answer.cpp; sourceTree = "<group>"; };
+		D734B91C1BA3308D004B16EE /* incentive_manager.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = incentive_manager.cpp; sourceTree = "<group>"; };
+		D734B91D1BA3308D004B16EE /* incentive_question.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = incentive_question.cpp; sourceTree = "<group>"; };
+		D734B91E1BA3308D004B16EE /* incentive_vote.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = incentive_vote.cpp; sourceTree = "<group>"; };
+		D734B91F1BA3308D004B16EE /* incentive.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = incentive.cpp; sourceTree = "<group>"; };
 		E2B0B9341B65644900CBF088 /* database_stack.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = database_stack.cpp; sourceTree = "<group>"; };
 		E2B0B9351B65644900CBF088 /* zerotime_answer.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = zerotime_answer.cpp; sourceTree = "<group>"; };
 		E2B0B9361B65644900CBF088 /* zerotime_lock.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = zerotime_lock.cpp; sourceTree = "<group>"; };
@@ -371,6 +391,11 @@
 				1A5F0F4A1971FD25009D830D /* globals.hpp */,
 				1AB48F8A1929A4C000FF276B /* hash.hpp */,
 				1A304C80192579A4002C5FAB /* http_transport.hpp */,
+				D734B9151BA33022004B16EE /* incentive.hpp */,
+				D734B9111BA33022004B16EE /* incentive_answer.hpp */,
+				D734B9121BA33022004B16EE /* incentive_manager.hpp */,
+				D734B9131BA33022004B16EE /* incentive_question.hpp */,
+				D734B9141BA33022004B16EE /* incentive_vote.hpp */,
 				1AA8D2BF19C151720061B3B8 /* inventory_cache.hpp */,
 				1AA8D2BA19C14A180061B3B8 /* inventory_vector.hpp */,
 				1A2A33BC194A71E400AABCEA /* kernel.hpp */,
@@ -472,6 +497,11 @@
 				1A0C06171A5B6A4D00975C40 /* globals.cpp */,
 				1AB48F8B1929A4CF00FF276B /* hash.cpp */,
 				1A304C91192579A4002C5FAB /* http_transport.cpp */,
+				D734B91F1BA3308D004B16EE /* incentive.cpp */,
+				D734B91B1BA3308D004B16EE /* incentive_answer.cpp */,
+				D734B91C1BA3308D004B16EE /* incentive_manager.cpp */,
+				D734B91D1BA3308D004B16EE /* incentive_question.cpp */,
+				D734B91E1BA3308D004B16EE /* incentive_vote.cpp */,
 				1AA8D2BB19C14B7D0061B3B8 /* inventory_vector.cpp */,
 				1A2A33BD194A720F00AABCEA /* kernel.cpp */,
 				1A0A6AB11957D84500964544 /* key.cpp */,
@@ -541,14 +571,19 @@
 			files = (
 				E2B0B94A1B65649100CBF088 /* zerotime_question.hpp in Headers */,
 				E2B0B94B1B65649100CBF088 /* zerotime.hpp in Headers */,
+				D734B9171BA33022004B16EE /* incentive_manager.hpp in Headers */,
 				1ADAAD511ABFA82A00CB4745 /* tcp_transport.hpp in Headers */,
 				E2B0B9481B65649100CBF088 /* zerotime_lock.hpp in Headers */,
 				1ADAAD521ABFA82A00CB4745 /* gateway.hpp in Headers */,
+				D734B9181BA33022004B16EE /* incentive_question.hpp in Headers */,
 				E2B0B9491B65649100CBF088 /* zerotime_manager.hpp in Headers */,
+				D734B91A1BA33022004B16EE /* incentive.hpp in Headers */,
 				1ADAAD541ABFA82A00CB4745 /* tcp_acceptor.hpp in Headers */,
 				E2B0B9471B65649100CBF088 /* zerotime_answer.hpp in Headers */,
 				E2B0B9461B65649100CBF088 /* database_stack.hpp in Headers */,
 				1ADAAD551ABFA82A00CB4745 /* sha256.hpp in Headers */,
+				D734B9191BA33022004B16EE /* incentive_vote.hpp in Headers */,
+				D734B9161BA33022004B16EE /* incentive_answer.hpp in Headers */,
 				D71710511B80DD66000D9019 /* zerotime_vote.hpp in Headers */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -626,12 +661,14 @@
 				E2B0B93B1B65644900CBF088 /* zerotime_answer.cpp in Sources */,
 				1ADAAD101ABFA82A00CB4745 /* tcp_acceptor.cpp in Sources */,
 				1ADAAD111ABFA82A00CB4745 /* script.cpp in Sources */,
+				D734B9201BA3308D004B16EE /* incentive_answer.cpp in Sources */,
 				1ADAAD121ABFA82A00CB4745 /* alert.cpp in Sources */,
 				1ADAAD131ABFA82A00CB4745 /* stack_impl.cpp in Sources */,
 				1ADAAD141ABFA82A00CB4745 /* tcp_transport.cpp in Sources */,
 				1ADAAD151ABFA82A00CB4745 /* transaction_merkle.cpp in Sources */,
 				1ADAAD171ABFA82A00CB4745 /* block.cpp in Sources */,
 				1ADAAD181ABFA82A00CB4745 /* transaction_position.cpp in Sources */,
+				D734B9231BA3308D004B16EE /* incentive_vote.cpp in Sources */,
 				1ADAAD191ABFA82A00CB4745 /* tcp_connection_manager.cpp in Sources */,
 				1ADAAD1A1ABFA82A00CB4745 /* hash.cpp in Sources */,
 				1ADAAD1B1ABFA82A00CB4745 /* db.cpp in Sources */,
@@ -650,6 +687,7 @@
 				1ADAAD281ABFA82A00CB4745 /* transaction_wallet.cpp in Sources */,
 				1ADAAD291ABFA82A00CB4745 /* nat_pmp.cpp in Sources */,
 				1ADAAD2A1ABFA82A00CB4745 /* rpc_transport.cpp in Sources */,
+				D734B9211BA3308D004B16EE /* incentive_manager.cpp in Sources */,
 				1ADAAD2B1ABFA82A00CB4745 /* stack.cpp in Sources */,
 				1ADAAD2C1ABFA82A00CB4745 /* transaction_out.cpp in Sources */,
 				1ADAAD2D1ABFA82A00CB4745 /* signature_cache.cpp in Sources */,
@@ -667,6 +705,7 @@
 				1ADAAD391ABFA82A00CB4745 /* key_store_crypto.cpp in Sources */,
 				1ADAAD3A1ABFA82A00CB4745 /* sha256.cpp in Sources */,
 				1ADAAD3B1ABFA82A00CB4745 /* secret.cpp in Sources */,
+				D734B9241BA3308D004B16EE /* incentive.cpp in Sources */,
 				1ADAAD3D1ABFA82A00CB4745 /* base58.cpp in Sources */,
 				1ADAAD3E1ABFA82A00CB4745 /* inventory_vector.cpp in Sources */,
 				1ADAAD3F1ABFA82A00CB4745 /* http_transport.cpp in Sources */,
@@ -674,6 +713,7 @@
 				1ADAAD411ABFA82A00CB4745 /* tcp_connection.cpp in Sources */,
 				1ADAAD421ABFA82A00CB4745 /* checkpoint_sync_unsigned.cpp in Sources */,
 				1ADAAD431ABFA82A00CB4745 /* transaction.cpp in Sources */,
+				D734B9221BA3308D004B16EE /* incentive_question.cpp in Sources */,
 				1ADAAD441ABFA82A00CB4745 /* big_number.cpp in Sources */,
 				1ADAAD451ABFA82A00CB4745 /* utility.cpp in Sources */,
 				1ADAAD461ABFA82A00CB4745 /* alert_manager.cpp in Sources */,
