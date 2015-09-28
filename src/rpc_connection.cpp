@@ -2496,11 +2496,11 @@ rpc_connection::json_rpc_response_t rpc_connection::json_getblocktemplate(
              * "incentive": {
              *     "enforced": true,
              *     "address": "VdPoLns3EFSqd5QghGecBvoNV6Afs3EgdW",
-             *     "amount": 3703703,
+             *     "amount": 617284,
              * }
              */
             
-            pt_incentive.put("enforced", false);
+            pt_incentive.put("enforced", true);
             
             /**
              * Check this block height for incentive winners.
@@ -2519,14 +2519,10 @@ rpc_connection::json_rpc_response_t rpc_connection::json_getblocktemplate(
                 /**
                  * Get the incentive amount.
                  */
-                auto amount =
-                    static_cast<std::int64_t> (
-                    blk->transactions()[0].transactions_out()[0].value() *
-                    (incentive::instance().get_percentage(
-                    index_previous->height() + 1) / 100.0f))
-                ;
-                
-                pt_incentive.put("amount", amount);
+                pt_incentive.put(
+                    "amount",
+                    blk->transactions()[0].transactions_out()[1].value()
+                );
             }
             else
             {
