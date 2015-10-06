@@ -52,6 +52,7 @@
 #include <coin/stack_impl.hpp>
 #include <coin/tcp_connection.hpp>
 #include <coin/tcp_connection_manager.hpp>
+#include <coin/tcp_transport.hpp>
 #include <coin/time.hpp>
 #include <coin/transaction_in.hpp>
 #include <coin/transaction_out.hpp>
@@ -342,7 +343,7 @@ std::shared_ptr<block> block::create_new(
 
                 auto wallet_address =
                     incentive::instance().winners()[
-                    index_previous->height() + 1]
+                    index_previous->height() + 1].second
                 ;
                 
                 address addr;
@@ -1533,8 +1534,8 @@ bool block::check_block(
                     enum { incentive_enforcement = 220000 };
 
                     if (
-                        index_previous
-                        && index_previous->height() + 1 >= incentive_enforcement
+                        index_previous &&
+                        index_previous->height() + 1 >= incentive_enforcement
                         )
                     {
                         if (
@@ -1587,7 +1588,7 @@ bool block::check_block(
                                     auto winner =
                                         incentive::instance().winners()[
                                         index_previous->height() + 1
-                                    ];
+                                    ].second;
                                     
                                     if (winner.size() > 0)
                                     {
@@ -1698,7 +1699,7 @@ bool block::check_block(
                                                             {
                                                                 connection->set_dos_score(
                                                                     connection->dos_score(
-                                                                    ) + 10
+                                                                    ) + 1
                                                                 );
                                                             }
                                                             
@@ -1732,7 +1733,8 @@ bool block::check_block(
                                             if (connection)
                                             {
                                                 connection->set_dos_score(
-                                                    connection->dos_score() + 5
+                                                    connection->dos_score()
+                                                    + 5
                                                 );
                                             }
                                             
@@ -1775,7 +1777,7 @@ bool block::check_block(
                                     if (connection)
                                     {
                                         connection->set_dos_score(
-                                            connection->dos_score() + 20
+                                            connection->dos_score() + 1
                                         );
                                     }
                                     
@@ -1789,19 +1791,51 @@ bool block::check_block(
                             }
                             else
                             {
-                                log_info("Got incentive reward(RAPED) EMPTY.");
+                                if (connection)
+                                {
+                                    try
+                                    {
+                                        if (
+                                            auto t =
+                                            connection->get_tcp_transport(
+                                            ).lock()
+                                            )
+                                        {
+                                            log_info(
+                                                "Got incentive reward(RAPED) "
+                                                "EMPTY from " << t->socket(
+                                                ).remote_endpoint() << "."
+                                            );
+                                        }
+                                    }
+                                    catch (std::exception & e)
+                                    {
+                                        log_info(
+                                            "Got incentive reward(RAPED) EMPTY "
+                                            "what = " << e.what() << "."
+                                        );
+                                    }
+                                }
+                                else
+                                {
+                                    log_info(
+                                        "Got incentive reward(RAPED) EMPTY "
+                                        "from ???."
+                                    );
+                                }
                                 
                                 /**
                                  * Set the Denial-of-Service score for the
                                  * connection.
                                  */
+#if 0 /* Until pools are done testing. */
                                 if (connection)
                                 {
                                     connection->set_dos_score(
-                                        connection->dos_score() + 20
+                                        connection->dos_score() + 1
                                     );
                                 }
-                                
+#endif
                                 /**
                                  * There was no incentive transaction found in
                                  * the block, reject and increase the peers ban
