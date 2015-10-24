@@ -658,7 +658,7 @@ bool rpc_connection::handle_json_rpc_request(
     }
     else if (request.method == "walletstatus")
     {
-        response = json_walletstatus();
+        response.result = json_walletstatus();
     }
     else if (request.method == "validateaddress")
     {
