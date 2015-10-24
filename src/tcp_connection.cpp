@@ -1160,6 +1160,41 @@ void tcp_connection::send_getdata_message()
     }
 }
 
+void tcp_connection::send_headers_message(const std::vector<block> & headers)
+{
+    if (auto t = m_tcp_transport.lock())
+    {
+        /**
+         * Allocate the message.
+         */
+        message msg("headers");
+
+        /**
+         * Set the headers.
+         */
+        msg.protocol_headers().headers = headers;
+        
+        log_debug(
+            "TCP connection is sending headers " <<
+            msg.protocol_headers().headers.size() << "."
+        );
+
+        /**
+         * Encode the message.
+         */
+        msg.encode();
+        
+        /**
+         * Write the message.
+         */
+        t->write(msg.data(), msg.size());
+    }
+    else
+    {
+        stop();
+    }
+}
+
 void tcp_connection::send_tx_message(const transaction & tx)
 {
     if (auto t = m_tcp_transport.lock())
@@ -1965,8 +2000,7 @@ bool tcp_connection::handle_message(message & msg)
                  */
                 if (
                     m_direction == direction_outgoing &&
-                    utility::is_initial_block_download() == false &&
-                    m_protocol_version >= constants::mempool_getdata_version
+                    utility::is_initial_block_download() == false
                     )
                 {
                     send_mempool_message();
@@ -2053,10 +2087,7 @@ bool tcp_connection::handle_message(message & msg)
     }
     else if (msg.header().command == "addr")
     {
-        if (
-            msg.protocol_addr().count > 1000 ||
-            m_protocol_version < constants::min_addr_version
-            )
+        if (msg.protocol_addr().count > 1000)
         {
             /**
              * Set the Denial-of-Service score for the connection.
@@ -2139,14 +2170,6 @@ bool tcp_connection::handle_message(message & msg)
                         {
                             if (auto t = i2.second.lock())
                             {
-                                if (
-                                    t->protocol_version() <
-                                    constants::min_addr_version
-                                    )
-                                {
-                                    continue;
-                                }
-                            
                                 std::uint32_t ptr_uint32;
                                 
                                 auto ptr_transport = t.get();
@@ -2826,11 +2849,62 @@ bool tcp_connection::handle_message(message & msg)
     }
     else if (msg.header().command == "getheaders")
     {
-        log_debug("got getheaders");
+        log_debug("Got getheaders");
+        
+        const auto & locator = msg.protocol_getheaders().locator;
+        
+        std::shared_ptr<block_index> index;
+        
+        if (locator && locator->is_null())
+        {
+            auto it = globals::instance().block_indexes().find(
+                msg.protocol_getheaders().hash_stop
+            );
+            
+            if (it == globals::instance().block_indexes().end())
+            {
+                return true;
+            }
+            
+            index = it->second;
+        }
+        else
+        {
+            index = locator->get_block_index();
+            
+            if (index)
+            {
+                index = index->block_index_next();
+            }
+        }
+
+        std::vector<block> headers;
+        
+        std::int16_t limit = 2000;
+        
+        log_debug(
+            "TCP connection getheaders " << (index ? index->height() : -1) <<
+            " to " <<
+            msg.protocol_getheaders().hash_stop.to_string().substr(0, 8) << "."
+        );
+
+        for (; index; index = index->block_index_next())
+        {
+            headers.push_back(index->get_block_header());
+            
+            if (
+                --limit <= 0 ||
+                index->get_block_hash() == msg.protocol_getheaders().hash_stop
+                )
+            {
+                break;
+            }
+        }
         
         /**
-         * :JC: If there is high enough demand I will implement this.
+         * Send headers message.
          */
+        send_headers_message(headers);
     }
     else if (msg.header().command == "tx")
     {
@@ -3122,7 +3196,7 @@ bool tcp_connection::handle_message(message & msg)
                             }
                             
                             /**
-                             * Vote for the ztlock if score allows.
+                             * Vote for the ztlock.
                              */
                             stack_impl_.get_zerotime_manager()->vote(
                                 ztlock->hash_tx(), ztlock->transactions_in()
@@ -3359,36 +3433,92 @@ bool tcp_connection::handle_message(message & msg)
                     else
                     {
                         /**
-                         * Insert the incentive_vote.
+                         * Get the best block_index.
                          */
-                        incentive::instance().votes()[
-                            ivote->hash_nonce()] = *ivote
+                        auto index_previous =
+                            stack_impl::get_block_index_best()
                         ;
                         
                         /**
-                         * Inform the incentive_manager.
+                         * Get the next block height
                          */
-                        if (auto transport = m_tcp_transport.lock())
-                        {
-                            stack_impl_.get_incentive_manager()->handle_message(
-                                transport->socket().remote_endpoint(), msg
-                            );
-                        }
+                        auto height =
+                            index_previous ?
+                            index_previous->height() + 1 : 0
+                        ;
 
                         /**
-                         * Allocate the data_buffer.
+                         * Check that the block height is close to
+                         * ours (within one blocks).
                          */
-                        data_buffer buffer;
+                        if (
+                            ivote->block_height() + 2 < height &&
+                            static_cast<std::int32_t> (height) -
+                            (ivote->block_height() + 2) > 0
+                            )
+                        {
+                            log_debug(
+                                "TCP connection is dropping old vote " <<
+                                ivote->block_height() + 2 <<
+                                ", diff = " << static_cast<std::int32_t> (
+                                height) - (ivote->block_height() + 2) << "."
+                            );
+                        }
+                        else
+                        {
+                            if (ivote->score() < 0)
+                            {
+                                log_debug(
+                                    "TCP connection is dropping invalid ivote, "
+                                    "score = " << ivote->score() << "."
+                                );
+                            }
+                            else if (
+                                stack_impl_.get_incentive_manager(
+                                )->validate_collateral(*ivote) == false
+                                )
+                            {
+                                log_debug(
+                                    "TCP connection is dropping ivote invalid "
+                                    "collateral."
+                                );
+                            }
+                            else
+                            {
+                                /**
+                                 * Insert the incentive_vote.
+                                 */
+                                incentive::instance().votes()[
+                                    ivote->hash_nonce()] = *ivote
+                                ;
+                                
+                                /**
+                                 * Inform the incentive_manager.
+                                 */
+                                if (auto transport = m_tcp_transport.lock())
+                                {
+                                    stack_impl_.get_incentive_manager(
+                                        )->handle_message(transport->socket(
+                                        ).remote_endpoint(), msg
+                                    );
+                                }
+
+                                /**
+                                 * Allocate the data_buffer.
+                                 */
+                                data_buffer buffer;
+                                
+                                /**
+                                 * Encode the transaction (reuse the signature).
+                                 */
+                                ivote->encode(buffer, true);
                         
-                        /**
-                         * Encode the transaction (reuse the signature).
-                         */
-                        ivote->encode(buffer, true);
-                
-                        /**
-                         * Relay the ztvote.
-                         */
-                        relay_inv(inv, buffer);
+                                /**
+                                 * Relay the ztvote.
+                                 */
+                                relay_inv(inv, buffer);
+                            }
+                        }
                     }
                 }
             }

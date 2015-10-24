@@ -1825,21 +1825,28 @@ bool block::check_block(
                                 }
                                 
                                 /**
+                                 * We have winners but got a block with an
+                                 * empty reward, clear the winner and reject
+                                 * the block.
+                                 */
+                                incentive::instance().winners().erase(
+                                    index_previous->height() + 1
+                                );
+                                
+                                /**
                                  * Set the Denial-of-Service score for the
                                  * connection.
                                  */
-#if 0 /* Until pools are done testing. */
                                 if (connection)
                                 {
                                     connection->set_dos_score(
                                         connection->dos_score() + 1
                                     );
                                 }
-#endif
+
                                 /**
                                  * There was no incentive transaction found in
-                                 * the block, reject and increase the peers ban
-                                 * score.
+                                 * the block, reject it.
                                  */
                                 return false;
                             }
@@ -2325,15 +2332,18 @@ bool block::accept_block(
          */
         if (globals::instance().hash_best_chain() == hash_block)
         {
-            auto connections = connection_manager->tcp_connections();
-            
-            for (auto & i : connections)
+            if (connection_manager)
             {
-                if (auto connection = i.second.lock())
+                auto connections = connection_manager->tcp_connections();
+                
+                for (auto & i : connections)
                 {
-                    connection->send_inv_message(
-                        inventory_vector::type_msg_block, hash_block
-                    );
+                    if (auto connection = i.second.lock())
+                    {
+                        connection->send_inv_message(
+                            inventory_vector::type_msg_block, hash_block
+                        );
+                    }
                 }
             }
         }

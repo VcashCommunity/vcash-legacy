@@ -88,36 +88,15 @@ bool incentive_manager::handle_message(
         {
             auto is_vote_valid = true;
             
+            /**
+             * Get the best block_index.
+             */
             auto index_previous = stack_impl::get_block_index_best();
             
             /**
-             * Get the collateral.
+             * Get the next block height
              */
-            auto collateral =
-                incentive::instance().get_collateral(
-                index_previous ? index_previous->height() + 1 : 0)
-            ;
-            
-            if (collateral > 0)
-            {
-                std::lock_guard<std::mutex> l1(mutex_collaterals_);
-                
-                if (
-                    collaterals_.count(
-                    msg.protocol_ivote().ivote->address()) > 0
-                    )
-                {
-                    is_vote_valid =
-                        collaterals_[
-                        msg.protocol_ivote().ivote->address()
-                        ].second >= collateral
-                    ;
-                }
-                else
-                {
-                    is_vote_valid = false;
-                }
-            }
+            auto height = index_previous ? index_previous->height() + 1 : 0;
         
             /**
              * Check that the ivote is not negative.
@@ -126,13 +105,52 @@ bool incentive_manager::handle_message(
             {
                 is_vote_valid = false;
             }
+
+            /**
+             * Check that the block height is close to ours (within two
+             * blocks).
+             * @note This (if) should never be reached since it is performed
+             * by TCP and UDP however let's be safe since origins may change.
+             */
+            if (
+                msg.protocol_ivote().ivote->block_height() + 2 < height &&
+                static_cast<std::int32_t> (height) -
+                msg.protocol_ivote().ivote->block_height() > 2
+                )
+            {
+                is_vote_valid = false;
+                
+                log_debug(
+                    "Incentive manager is dropping old vote " <<
+                    msg.protocol_ivote().ivote->block_height() + 2 <<
+                    ", diff = " << static_cast<std::int32_t> (height) -
+                    msg.protocol_ivote().ivote->block_height() + 2 << "."
+                );
+            }
+            
+            /**
+             * Check the collateral.
+             * @note We perform this at the TCP and UDP level but just in
+             * case a message origin is something else we do it here too.
+             */
+            if (validate_collateral(*msg.protocol_ivote().ivote) == false)
+            {
+                is_vote_valid = false;
+                
+                log_debug(
+                    "Incentive manager is dropping vote, invalid collateral "
+                    "for " <<
+                    msg.protocol_ivote().ivote->address().substr(0, 8) << "."
+                );
+            }
         
             if (is_vote_valid)
             {
                 log_debug(
                     "Incentive manager got vote for " <<
                     msg.protocol_ivote().ivote->block_height() + 2 << ":" <<
-                    msg.protocol_ivote().ivote->address().substr(0, 8) << "."
+                    msg.protocol_ivote().ivote->address().substr(0, 8) <<
+                    ", score = " << msg.protocol_ivote().ivote->score() << "."
                 );
                 
                 std::lock_guard<std::mutex> l1(mutex_votes_);
@@ -256,6 +274,10 @@ bool incentive_manager::handle_message(
                 
                 log_debug(ss.str());
             }
+            else
+            {
+                log_none("Incentive manager is dropping invalid vote.");
+            }
         }
         else
         {
@@ -273,6 +295,46 @@ bool incentive_manager::handle_message(
 const double & incentive_manager::collateral_balance() const
 {
     return m_collateral_balance;
+}
+
+bool incentive_manager::validate_collateral(const incentive_vote & ivote)
+{
+    auto ret = true;
+    
+    /**
+     * Get the best block_index.
+     */
+    auto index_previous = stack_impl::get_block_index_best();
+    
+    /**
+     * Get the next block height
+     */
+    auto height = index_previous ? index_previous->height() + 1 : 0;
+    
+    /**
+     * Get the collateral.
+     */
+    auto collateral = incentive::instance().get_collateral(height);
+    
+    if (collateral > 0)
+    {
+        std::lock_guard<std::mutex> l1(mutex_collaterals_);
+        
+        if (
+            collaterals_.count(ivote.address()) > 0
+            )
+        {
+            ret =
+                collaterals_[ivote.address()].second >= collateral
+            ;
+        }
+        else
+        {
+            ret = false;
+        }
+    }
+    
+    return ret;
 }
 
 void incentive_manager::do_tick(const std::uint32_t & interval)
@@ -334,153 +396,146 @@ void incentive_manager::do_tick(const std::uint32_t & interval)
                     }
                 }
                 
+                /**
+                 * Get our best block height.
+                 */
+                auto block_height =
+                    globals::instance().best_block_height()
+                ;
+            
+                /**
+                 * Get the block height to vote for.
+                 */
+                auto vote_block_height = block_height + 2;
+                
+                /**
+                 * Remove winners older than N mins.
+                 */
+                auto it1 = incentive::instance().winners().begin();
+                
+                while (it1 != incentive::instance().winners().end())
+                {
+                    if (std::time(0) - it1->second.first > 20 * 60)
+                    {
+                        it1 =
+                            incentive::instance().winners().erase(it1)
+                        ;
+                    }
+                    else
+                    {
+                        ++it1;
+                    }
+                }
+                
+                /**
+                 * Remove votes older than 4 blocks.
+                 */
+                auto it2 = incentive::instance().votes().begin();
+                
+                while (it2 != incentive::instance().votes().end())
+                {
+                    if (
+                        vote_block_height -
+                        it2->second.block_height() > 4
+                        )
+                    {
+                        it2 = incentive::instance().votes().erase(it2);
+                    }
+                    else
+                    {
+                        ++it2;
+                    }
+                }
+                
+                /**
+                 * Remove runners up older than 4 blocks.
+                 */
+                auto it3 = incentive::instance().runners_up().begin();
+                
+                while (it3 != incentive::instance().runners_up().end())
+                {
+                    if (
+                        vote_block_height - it3->first > 4
+                        )
+                    {
+                        it3 =
+                            incentive::instance().runners_up(
+                            ).erase(it3)
+                        ;
+                    }
+                    else
+                    {
+                        ++it3;
+                    }
+                }
+                
+                /**
+                 * Remove candidates older than N mins.
+                 */
+                std::lock_guard<std::mutex> l1(mutex_candidates_);
+            
+                auto it4 = candidates_.begin();
+                
+                while (it4 != candidates_.end())
+                {
+                    if (std::time(0) - it4->second.first > 20 * 60)
+                    {
+                        it4 = candidates_.erase(it4);
+                    }
+                    else
+                    {
+                        ++it4;
+                    }
+                }
+                
+                /**
+                 * Remove votes older than 4 blocks.
+                 */
+                std::lock_guard<std::mutex> l2(mutex_votes_);
+                
+                auto it5 = votes_.begin();
+                
+                while (it5 != votes_.end())
+                {
+                    if (vote_block_height - it5->first > 4)
+                    {
+                        it5 = votes_.erase(it5);
+                    }
+                    else
+                    {
+                        ++it5;
+                    }
+                }
+                
+                /**
+                 * Remove collaterals older than 3 hours.
+                 */
+                std::lock_guard<std::mutex> l3(mutex_collaterals_);
+                
+                auto it6 = collaterals_.begin();
+                
+                while (it6 != collaterals_.end())
+                {
+                    if (
+                        std::time(0) - it6->second.first > (3 * 60 * 60)
+                        )
+                    {
+                        it6 = collaterals_.erase(it6);
+                    }
+                    else
+                    {
+                        ++it6;
+                    }
+                }
+                
                 if (incentive::instance().get_key().is_null() == false)
                 {
-                    /**
-                     * Get our best block height.
-                     */
-                    auto block_height =
-                        globals::instance().best_block_height()
-                    ;
-                
-                    /**
-                     *  Get the block index.
-                     */
-                    auto index =
-                        utility::find_block_index_by_height(block_height)
-                    ;
-                
                     /**
                      * Check if the block height has changed.
                      */
                     if (block_height > last_block_height_)
                     {
                         last_block_height_ = block_height;
-                        
-                        /**
-                         * Get the block height to vote for.
-                         */
-                        auto vote_block_height = block_height + 2;
-                        
-                        /**
-                         * Remove winners older than N mins.
-                         */
-                        auto it1 = incentive::instance().winners().begin();
-                        
-                        while (it1 != incentive::instance().winners().end())
-                        {
-                            if (std::time(0) - it1->second.first > 10 * 60)
-                            {
-                                it1 =
-                                    incentive::instance().winners().erase(it1)
-                                ;
-                            }
-                            else
-                            {
-                                ++it1;
-                            }
-                        }
-                        
-                        /**
-                         * Remove votes older than 4 blocks.
-                         */
-                        auto it2 = incentive::instance().votes().begin();
-                        
-                        while (it2 != incentive::instance().votes().end())
-                        {
-                            if (
-                                vote_block_height -
-                                it2->second.block_height() > 4
-                                )
-                            {
-                                it2 = incentive::instance().votes().erase(it2);
-                            }
-                            else
-                            {
-                                ++it2;
-                            }
-                        }
-                        
-                        /**
-                         * Remove runners up older than 4 blocks.
-                         */
-                        auto it3 = incentive::instance().runners_up().begin();
-                        
-                        while (it3 != incentive::instance().runners_up().end())
-                        {
-                            if (
-                                vote_block_height - it3->first > 4
-                                )
-                            {
-                                it3 =
-                                    incentive::instance().runners_up(
-                                    ).erase(it3)
-                                ;
-                            }
-                            else
-                            {
-                                ++it3;
-                            }
-                        }
-                        
-                        /**
-                         * Remove candidates older than 20 mins.
-                         */
-                        std::lock_guard<std::mutex> l1(mutex_candidates_);
-                    
-                        auto it4 = candidates_.begin();
-                        
-                        while (it4 != candidates_.end())
-                        {
-                            if (std::time(0) - it4->second.first > 20 * 60)
-                            {
-                                it4 = candidates_.erase(it4);
-                            }
-                            else
-                            {
-                                ++it4;
-                            }
-                        }
-                        
-                        /**
-                         * Remove votes older than 4 blocks.
-                         */
-                        std::lock_guard<std::mutex> l2(mutex_votes_);
-                        
-                        auto it5 = votes_.begin();
-                        
-                        while (it5 != votes_.end())
-                        {
-                            if (vote_block_height - it5->first > 4)
-                            {
-                                it5 = votes_.erase(it5);
-                            }
-                            else
-                            {
-                                ++it5;
-                            }
-                        }
-                        
-                        /**
-                         * Remove collaterals older than 3 hours.
-                         */
-                        std::lock_guard<std::mutex> l3(mutex_collaterals_);
-                        
-                        auto it6 = collaterals_.begin();
-                        
-                        while (it6 != collaterals_.end())
-                        {
-                            if (
-                                std::time(0) - it6->second.first > (3 * 60 * 60)
-                                )
-                            {
-                                it6 = collaterals_.erase(it6);
-                            }
-                            else
-                            {
-                                ++it6;
-                            }
-                        }
                         
                         /**
                          * Get the recent good endpoints.
@@ -606,7 +661,7 @@ void incentive_manager::do_tick(const std::uint32_t & interval)
                                             ).acceptable(tx).first == false
                                             )
                                         {
-                                            log_info(
+                                            log_debug(
                                                 "Incentive manager detected "
                                                 "invalid collateral for " <<
                                                 recent.wallet_address.substr(
@@ -878,7 +933,7 @@ void incentive_manager::do_tick(const std::uint32_t & interval)
                 /**
                  * Start the timer.
                  */
-                do_tick(8);
+                do_tick(4);
             }
         }
     }));

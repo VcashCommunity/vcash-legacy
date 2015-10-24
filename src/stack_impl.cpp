@@ -936,7 +936,7 @@ void stack_impl::start()
                          */
                         m_status_manager->insert(status);
 
-                        log_debug(
+                        log_info(
                             "Stack, wallet is rescanning last " <<
                             stack_impl::get_block_index_best()->height() -
                             index_rescan->height() <<
@@ -949,6 +949,7 @@ void stack_impl::start()
                         );
                     }
                 });
+
 #if 1
                 /**
                  * Use a single std::thread to run the asio::io_service to
@@ -1065,6 +1066,31 @@ void stack_impl::start()
          * Callback
          */
         on_error(error);
+    }
+    
+    /**
+     * Check if we ned to import the blockchain.dat file from disk.
+     */
+    if (m_configuration.args()["import-blockchain"] == "1")
+    {
+        globals::instance().io_service().post(
+            globals::instance().strand().wrap([this]()
+        {
+            /**
+             * Import blockchain.dat from disk.
+             */
+            auto path = filesystem::data_path() + "blockchain.dat";
+        
+            if (import_blockchain_file(path) == true)
+            {
+                log_info("Stack imported blockchain file.");
+            }
+            else
+            {
+                log_error("Stack failed to import blockchain file.");
+            }
+
+        }));
     }
 
     globals::instance().io_service().post(
@@ -1347,11 +1373,42 @@ void stack_impl::start()
              */
             if (m_configuration.network_udp_enable() == true)
             {
-                m_database_stack->start(
-                    tcp_port,
-                    globals::instance().operation_mode() ==
-                    protocol::operation_mode_client
-                );
+                if (m_database_stack)
+                {
+                    m_database_stack->start(
+                        tcp_port,
+                        globals::instance().operation_mode() ==
+                        protocol::operation_mode_client
+                    );
+                    
+                    /**
+                     * Get some addresses from the address_manager.
+                     */
+                    auto addrs = m_address_manager->get_addr(96);
+                    
+                    /**
+                     * Allocate the UDP contacts.
+                     */
+                    std::vector< std::pair<std::string, std::uint16_t> >
+                        udp_contacts
+                    ;
+                    
+                    for (auto & i : addrs)
+                    {
+                        /**
+                         * Add the UDP contact.
+                         */
+                        udp_contacts.push_back(
+                            std::make_pair(i.ipv4_mapped_address().to_string(),
+                            i.port)
+                        );
+                    }
+                    
+                    /**
+                     * Add to the database_stack.
+                     */
+                    m_database_stack->join(udp_contacts);
+                }
             }
             
             /**
@@ -1502,7 +1559,10 @@ void stack_impl::stop()
      */
     if (m_configuration.network_udp_enable() == true)
     {
-        m_database_stack->stop();
+        if (m_database_stack)
+        {
+            m_database_stack->stop();
+        }
     }
     
     /**
@@ -1971,7 +2031,7 @@ void stack_impl::broadcast_alert(
          */
         a.set_relay_until(
             static_cast<std::int32_t> (
-            time::instance().get_adjusted() + 365 * 24 * 60 * 60)
+            time::instance().get_adjusted() + 7 * 24 * 60 * 60)
         );
     
         /**
@@ -1979,7 +2039,7 @@ void stack_impl::broadcast_alert(
          */
         a.set_expiration(
             static_cast<std::int32_t> (
-            time::instance().get_adjusted() + 365 * 24 * 60 * 60)
+            time::instance().get_adjusted() + 7 * 24 * 60 * 60)
         );
         
         /**
@@ -2205,6 +2265,52 @@ void stack_impl::wallet_unlock(const std::string & passphrase)
     }));
 }
 
+void stack_impl::wallet_change_passphrase(
+    const std::string & passphrase_old, const std::string & password_new
+    )
+{
+    globals::instance().io_service().post(
+        globals::instance().strand().wrap([this, passphrase_old, password_new]()
+    {
+        /**
+         * Allocate the pairs.
+         */
+        std::map<std::string, std::string> pairs;
+        
+        /**
+         * Set the pairs type.
+         */
+        pairs["type"] = "wallet";
+        
+        /**
+         * Set the pairs value (action in this case).
+         */
+        pairs["value"] = "change_passphrase";
+        
+        if (
+            globals::instance().wallet_main()->change_passphrase(
+            passphrase_old, password_new)
+            )
+        {
+            pairs["error.code"] = "0";
+            pairs["error.message"] = "success";
+        }
+        else
+        {
+            pairs["error.code"] = "-1";
+            pairs["error.message"] = "failed to change wallet passphrase";
+        }
+        
+        /**
+         * Callback
+         */
+        if (m_status_manager)
+        {
+            m_status_manager->insert(pairs);
+        }
+    }));
+}
+
 bool stack_impl::wallet_is_crypted(const std::uint32_t & wallet_id)
 {
     if (wallet_id == 0)
@@ -2223,6 +2329,12 @@ bool stack_impl::wallet_is_locked(const std::uint32_t & wallet_id)
     }
     
     return false;
+}
+
+
+void stack_impl::wallet_zerotime_lock(const std::string & tx_id)
+{
+    globals::instance().wallet_main()->zerotime_lock(sha256(tx_id));
 }
 
 void stack_impl::rpc_send(const std::string & command_line)
@@ -3939,6 +4051,177 @@ void stack_impl::lock_file_or_exit()
 #endif // _MSC_VER
 }
 
+bool stack_impl::import_blockchain_file(const std::string & path)
+{
+    file f;
+
+    std::uint32_t blocks_loaded = 0;
+    
+    if (f.open(path.c_str(), "rb") == true)
+    {
+        try
+        {
+            std::int32_t offset = 0;
+            
+            while (
+                offset != std::numeric_limits<std::uint32_t>::max() &&
+                globals::instance().state() == globals::state_started
+                )
+            {
+                char buf[65536];
+                
+                do
+                {
+                    f.seek_set(offset);
+                
+                    std::size_t bytes_read = sizeof(buf);
+                
+                    if (f.read(buf, bytes_read) == true)
+                    {
+                        if (bytes_read <= 8)
+                        {
+                            offset = std::numeric_limits<std::uint32_t>::max();
+                            
+                            break;
+                        }
+
+                        void * magic_ptr = std::memchr(
+                            buf, message::header_magic_bytes()[0],
+                            bytes_read + 1 - message::header_magic_length
+                        );
+                        
+                        if (magic_ptr)
+                        {
+                            if (
+                                std::memcmp(magic_ptr,
+                                &message::header_magic_bytes()[0],
+                                message::header_magic_length) == 0
+                                )
+                            {
+                                offset +=
+                                    reinterpret_cast<std::uint8_t *> (
+                                    magic_ptr) - reinterpret_cast<
+                                    std::uint8_t *> (buf) +
+                                    message::header_magic_length;
+                                
+                                break;
+                            }
+                            
+                            offset +=
+                                reinterpret_cast<std::uint8_t *> (
+                                magic_ptr) - reinterpret_cast<
+                                std::uint8_t *> (buf) + 1
+                            ;
+                        }
+                        else
+                        {
+                            offset +=
+                                sizeof(buf) - message::header_magic_length + 1
+                            ;
+                        }
+                        
+                    }
+                    else
+                    {
+                        offset = std::numeric_limits<std::uint32_t>::max();
+                        
+                        break;
+                    }
+                
+                } while (globals::instance().state() == globals::state_started);
+                
+                if (offset == std::numeric_limits<std::uint32_t>::max())
+                {
+                    break;
+                }
+                
+                f.seek_set(offset);
+                
+                std::uint32_t len = 0;
+                
+                if (
+                    f.read(
+                    reinterpret_cast<char *> (&len), sizeof(len)) == true
+                    )
+                {
+                    if (len > 0 && len < constants::max_block_size)
+                    {
+                        data_buffer buffer(len);
+                        
+                        if (f.read(buffer.data(), buffer.size()) == true)
+                        {
+                            std::shared_ptr<block> blk(new block());
+                            
+                            if (blk->decode(buffer) == true)
+                            {
+                                if (process_block(0, blk) == true)
+                                {
+                                    blocks_loaded++;
+                                    
+                                    offset +=
+                                        message::header_magic_length + len
+                                    ;
+                                    
+                                    if (blocks_loaded % 1 == 0)
+                                    {
+                                        /**
+                                         * Allocate the status.
+                                         */
+                                        std::map<std::string, std::string>
+                                            status
+                                        ;
+                                        
+                                        /**
+                                         * Set the status type.
+                                         */
+                                        status["type"] = "database";
+                                    
+                                        /**
+                                         * Set the status value.
+                                         */
+                                        status["value"] =
+                                            "Importing blockchain..."
+                                        ;
+                                        
+                                        /**
+                                         * Set the status value.
+                                         */
+                                        status["blockchain.import"] =
+                                            "Imported " +
+                                            std::to_string(blocks_loaded) +
+                                            " blocks..."
+                                        ;
+
+                                        /**
+                                         * Callback
+                                         */
+                                        m_status_manager->insert(status);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    break;
+                }
+            }
+        }
+        catch (std::exception & e)
+        {
+            log_error(
+                "Stack failed importing blockchain file, what = " <<
+                e.what() << "."
+            );
+        }
+    }
+    
+    log_info("Stack imported " << blocks_loaded << " from blockchain file.");
+    
+    return blocks_loaded != 0;
+}
+
 void stack_impl::remove_old_blocks_if_client()
 {
     log_info("Stack is removing old blocks if client.");
@@ -4071,7 +4354,9 @@ void stack_impl::do_check_peers(const std::uint32_t & interval)
                     {
                         std::vector<std::string> parts;
                         
-                        std::string endpoint = pair.second.get<std::string> ("");
+                        std::string endpoint =
+                            pair.second.get<std::string> ("")
+                        ;
                         
                         boost::split(
                             parts, endpoint, boost::is_any_of(":")
@@ -4082,7 +4367,8 @@ void stack_impl::do_check_peers(const std::uint32_t & interval)
                         auto port = parts[1];
 
                         log_debug(
-                            "Stack got peer endpoint = " << ip << ":" << port << "."
+                            "Stack got peer endpoint = " << ip << ":" <<
+                            port << "."
                         );
                         
                         /**
@@ -4101,8 +4387,9 @@ void stack_impl::do_check_peers(const std::uint32_t & interval)
                         if (m_address_manager->add(
                             addr, protocol::network_address_t::from_endpoint(
                             boost::asio::ip::tcp::endpoint(
-                            boost::asio::ip::address::from_string("127.0.0.1"), 0))
-                        ))
+                            boost::asio::ip::address::from_string(
+                            "127.0.0.1"), 0)))
+                            )
                         {
                             log_debug(
                                 "Stack added bootstrap peer " << ip << ":" <<

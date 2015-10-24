@@ -36,6 +36,11 @@ namespace coin {
         public:
         
             /**
+             * The header magic length.
+             */
+            enum { header_magic_length = 4 };
+        
+            /**
              * Constructor
              * @param buf The buffer.
              * @param len The length.
@@ -72,6 +77,11 @@ namespace coin {
              */
             bool verify_header_magic();
 
+            /**
+             * The header magic.
+             */
+            static std::vector<std::uint8_t> header_magic_bytes();
+        
             /**
              * The header magic number.
              */
@@ -144,6 +154,16 @@ namespace coin {
              * The protocol block structure.
              */
             protocol::block_t & protocol_block();
+        
+            /**
+             * The protocol getheaders structure.
+             */
+            protocol::getheaders_t & protocol_getheaders();
+        
+            /**
+             * The protocol headers structure.
+             */
+            protocol::headers_t & protocol_headers();
         
             /**
              * The protocol checkpoint structure.
@@ -248,6 +268,16 @@ namespace coin {
             protocol::block_t m_protocol_block;
         
             /**
+             * The protocol getheaders structure.
+             */
+            protocol::getheaders_t m_protocol_getheaders;
+        
+            /**
+             * The protocol headers structure.
+             */
+            protocol::headers_t m_protocol_headers;
+        
+            /**
              * The protocol checkpoint structure.
              */
             protocol::checkpoint_t m_protocol_checkpoint;
@@ -333,6 +363,16 @@ namespace coin {
              * Creates a getblocks.
              */
             data_buffer create_getblocks();
+        
+            /**
+             * Creates getheaders.
+             */
+            data_buffer create_getheaders();
+        
+            /**
+             * Creates headers.
+             */
+            data_buffer create_headers();
         
             /**
              * Creates a checkpoint.
