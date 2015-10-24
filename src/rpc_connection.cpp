@@ -564,6 +564,10 @@ bool rpc_connection::handle_json_rpc_request(
     {
         response = json_getblocktemplate(request);
     }
+    else if (request.method == "getconnectioncount")
+    {
+        response.result = json_getconnectioncount(request);
+    }
     else if (request.method == "getdifficulty")
     {
         response = json_getdifficulty(request);
@@ -2559,6 +2563,50 @@ rpc_connection::json_rpc_response_t rpc_connection::json_getblocktemplate(
         return json_rpc_response_t{
             boost::property_tree::ptree(), pt_error, request.id
         };
+    }
+    
+    return ret;
+}
+
+boost::property_tree::ptree rpc_connection::json_getconnectioncount()
+{
+    boost::property_tree::ptree ret;
+
+    try
+    {
+#if (defined USE_DATABASE_STACK && USE_DATABASE_STACK)
+        /**
+         * Get the UDP endpoints count from the database stack.
+         */
+        auto active_udp_connections = stack_impl_.get_database_stack()->endpoints().size();
+#else
+        auto active_udp_connections = 0;
+#endif // USE_DATABASE_STACK
+
+        ret.put(
+            "tcp",
+            stack_impl_.get_tcp_connection_manager()->active_tcp_connections()
+        );
+        ret.put(
+            "udp",
+            active_udp_connections
+        );
+        /**
+         * The std::stringstream.
+         */
+        std::stringstream ss;
+        
+        /**
+         * Write property tree to json file.
+         */
+        rpc_json_parser::write_json(ss, ret, false);
+    }
+    catch (std::exception & e)
+    {
+        log_error(
+            "RPC Connection failed to create json_getconnectioncount, what = " <<
+            e.what() << "."
+        );
     }
     
     return ret;
