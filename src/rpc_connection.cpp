@@ -566,7 +566,7 @@ bool rpc_connection::handle_json_rpc_request(
     }
     else if (request.method == "getconnectioncount")
     {
-        response.result = json_getconnectioncount(request);
+        response.result = json_getconnectioncount();
     }
     else if (request.method == "getdifficulty")
     {
