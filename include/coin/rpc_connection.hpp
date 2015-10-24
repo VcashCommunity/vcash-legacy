@@ -600,6 +600,11 @@ namespace coin {
             );
         
             /**
+             * Encodes walletstatus data into JSON format.
+             */
+            boost::property_tree::ptree json_walletstatus();
+        
+            /**
              * Encodes a transaction_wallet into a boost::property_tree::ptree.
              * @param wtx The transaction_wallet.
              */

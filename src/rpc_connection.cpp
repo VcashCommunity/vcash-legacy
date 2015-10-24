@@ -652,6 +652,10 @@ bool rpc_connection::handle_json_rpc_request(
     {
         response = json_walletpassphrasechange(request);
     }
+    else if (request.method == "walletstatus")
+    {
+        response = json_walletstatus();
+    }
     else if (request.method == "validateaddress")
     {
         response = json_validateaddress(request);
@@ -5213,6 +5217,42 @@ rpc_connection::json_rpc_response_t
         }
         
         ret.result.put("", "null");
+    }
+    
+    return ret;
+}
+
+boost::property_tree::ptree rpc_connection::json_walletstatus()
+{
+    boost::property_tree::ptree ret;
+
+    try
+    {
+        ret.put(
+            "encrypted",
+            globals::instance().wallet_main()->is_crypted()
+        );
+        ret.put(
+            "locked",
+            globals::instance().wallet_main()->is_locked()
+        );
+        
+        /**
+         * The std::stringstream.
+         */
+        std::stringstream ss;
+        
+        /**
+         * Write property tree to json file.
+         */
+        rpc_json_parser::write_json(ss, ret, false);
+    }
+    catch (std::exception & e)
+    {
+        log_error(
+            "RPC Connection failed to create json_walletstatus, what = " <<
+            e.what() << "."
+        );
     }
     
     return ret;
