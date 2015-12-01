@@ -1481,14 +1481,14 @@ rpc_connection::json_rpc_response_t rpc_connection::json_dumpwallet(
             auto reserve_keys = globals::instance().wallet_main()->reserve_keys();
 
             /**
-             * Format: key, address, type
+             * Format: key,address,type
              */
             std::ofstream ofs(filesystem::data_path() + "wallet.csv");
             
             /**
              * Columns
              */
-            ofs << "Key, Address, Type" << std::endl;
+            ofs << "Key,Address,Type" << std::endl;
             
             if (globals::instance().wallet_main()->is_crypted() == true)
             {
@@ -1516,24 +1516,24 @@ rpc_connection::json_rpc_response_t rpc_connection::json_dumpwallet(
                             )
                         {
                             ofs <<
-                                secret(s, k.is_compressed()).to_string() << ", " <<
-                                address(key_id).to_string() << ", label" <<
+                                secret(s, k.is_compressed()).to_string() << "," <<
+                                address(key_id).to_string() << ",label" <<
                                 std::endl
                             ;
                         }
                         else if (reserve_keys.count(key_id) > 0)
                         {
                             ofs <<
-                                secret(s, k.is_compressed()).to_string() << ", " <<
-                                address(key_id).to_string() << ", reserve" <<
+                                secret(s, k.is_compressed()).to_string() << "," <<
+                                address(key_id).to_string() << ",reserve" <<
                                 std::endl
                             ;
                         }
                         else
                         {
                             ofs <<
-                                secret(s, k.is_compressed()).to_string() << ", " <<
-                                address(key_id).to_string() << ", change" <<
+                                secret(s, k.is_compressed()).to_string() << "," <<
+                                address(key_id).to_string() << ",change" <<
                                 std::endl
                             ;
                         }
@@ -1566,24 +1566,24 @@ rpc_connection::json_rpc_response_t rpc_connection::json_dumpwallet(
                             )
                         {
                             ofs <<
-                                secret(s, k.is_compressed()).to_string() << ", " <<
-                                address(key_id).to_string() << ", label" <<
+                                secret(s, k.is_compressed()).to_string() << "," <<
+                                address(key_id).to_string() << ",label" <<
                                 std::endl
                             ;
                         }
                         else if (reserve_keys.count(key_id) > 0)
                         {
                             ofs <<
-                                secret(s, k.is_compressed()).to_string() << ", " <<
-                                address(key_id).to_string() << ", reserve" <<
+                                secret(s, k.is_compressed()).to_string() << "," <<
+                                address(key_id).to_string() << ",reserve" <<
                                 std::endl
                             ;
                         }
                         else
                         {
                             ofs <<
-                                secret(s, k.is_compressed()).to_string() << ", " <<
-                                address(key_id).to_string() << ", change" <<
+                                secret(s, k.is_compressed()).to_string() << "," <<
+                                address(key_id).to_string() << ",change" <<
                                 std::endl
                             ;
                         }
