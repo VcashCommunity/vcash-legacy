@@ -1329,7 +1329,23 @@ rpc_connection::json_rpc_response_t rpc_connection::json_dumpprivkey(
                 };
             }
             
-            if (globals::instance().wallet_unlocked_mint_only())
+            /**
+             * Make sure the wallet is unlocked.
+             */
+            if (globals::instance().wallet_main()->is_locked())
+            {
+                auto pt_error = create_error_object(
+                    error_code_wallet_unlock_needed, "wallet is locked"
+                );
+                
+                /**
+                 * error_code_wallet_unlock_needed
+                 */
+                return json_rpc_response_t{
+                    boost::property_tree::ptree(), pt_error, request.id
+                };
+            }
+            else if (globals::instance().wallet_unlocked_mint_only())
             {
                 auto pt_error = create_error_object(
                     error_code_wallet_unlock_needed,
@@ -1343,63 +1359,48 @@ rpc_connection::json_rpc_response_t rpc_connection::json_dumpprivkey(
                     boost::property_tree::ptree(), pt_error, request.id
                 };
             }
-            else if (globals::instance().wallet_main()->is_locked())
+            
+            types::id_key_t key_id;
+            
+            if (addr.get_id_key(key_id) == false)
             {
                 auto pt_error = create_error_object(
-                    error_code_wallet_unlock_needed, "wallet is locked"
+                    error_code_type_error, "failed to get key id"
                 );
                 
                 /**
-                 * error_code_wallet_unlock_needed
+                 * error_code_type_error
                  */
                 return json_rpc_response_t{
                     boost::property_tree::ptree(), pt_error, request.id
                 };
             }
-            else
+            
+            key::secret_t s;
+            
+            auto compressed = false;
+            
+            if (
+                globals::instance().wallet_main()->get_secret(
+                key_id, s, compressed) == false
+                )
             {
-                types::id_key_t key_id;
-                
-                if (addr.get_id_key(key_id) == false)
-                {
-                    auto pt_error = create_error_object(
-                        error_code_type_error, "failed to get key id"
-                    );
-                    
-                    /**
-                     * error_code_type_error
-                     */
-                    return json_rpc_response_t{
-                        boost::property_tree::ptree(), pt_error, request.id
-                    };
-                }
-                
-                key::secret_t s;
-                
-                auto compressed = false;
-                
-                if (
-                    globals::instance().wallet_main()->get_secret(
-                    key_id, s, compressed) == false
-                    )
-                {
-                    auto pt_error = create_error_object(
-                        error_code_wallet_error, "failed to get secret"
-                    );
-                    
-                    /**
-                     * error_code_wallet_error
-                     */
-                    return json_rpc_response_t{
-                        boost::property_tree::ptree(), pt_error, request.id
-                    };
-                }
-                
-                ret.result.put(
-                    "", secret(s, compressed).to_string(),
-                    rpc_json_parser::translator<std::string> ()
+                auto pt_error = create_error_object(
+                    error_code_wallet_error, "failed to get secret"
                 );
+                
+                /**
+                 * error_code_wallet_error
+                 */
+                return json_rpc_response_t{
+                    boost::property_tree::ptree(), pt_error, request.id
+                };
             }
+            
+            ret.result.put(
+                "", secret(s, compressed).to_string(),
+                rpc_json_parser::translator<std::string> ()
+            );
         }
         else
         {
@@ -1445,7 +1446,23 @@ rpc_connection::json_rpc_response_t rpc_connection::json_dumpwallet(
     
     try
     {
-        if (globals::instance().wallet_unlocked_mint_only())
+        /**
+         * Make sure the wallet is unlocked.
+         */
+        if (globals::instance().wallet_main()->is_locked())
+        {
+            auto pt_error = create_error_object(
+                error_code_wallet_unlock_needed, "wallet is locked"
+            );
+            
+            /**
+             * error_code_wallet_unlock_needed
+             */
+            return json_rpc_response_t{
+                boost::property_tree::ptree(), pt_error, request.id
+            };
+        }
+        else if (globals::instance().wallet_unlocked_mint_only())
         {
             auto pt_error = create_error_object(
                 error_code_wallet_unlock_needed,
@@ -1459,144 +1476,128 @@ rpc_connection::json_rpc_response_t rpc_connection::json_dumpwallet(
                 boost::property_tree::ptree(), pt_error, request.id
             };
         }
-        else if (globals::instance().wallet_main()->is_locked())
+        
+        /**
+         * Get the reserve keys.
+         */
+        auto reserve_keys = globals::instance().wallet_main()->reserve_keys();
+
+        /**
+         * Format: key,address,type
+         */
+        std::ofstream ofs(filesystem::data_path() + "wallet.csv");
+        
+        /**
+         * Columns
+         */
+        ofs << "Key,Address,Type\r\n";
+        
+        if (globals::instance().wallet_main()->is_crypted() == true)
         {
-            auto pt_error = create_error_object(
-                error_code_wallet_unlock_needed, "wallet is locked"
-            );
-            
             /**
-             * error_code_wallet_unlock_needed
+             * Iterate all keys.
              */
-            return json_rpc_response_t{
-                boost::property_tree::ptree(), pt_error, request.id
-            };
+            for (auto & i : globals::instance().wallet_main()->crypted_keys())
+            {
+                const auto & key_id = i.first;
+                
+                key k;
+                
+                if (
+                    globals::instance().wallet_main()->get_key(
+                    key_id, k) == true
+                    )
+                {
+                    auto compressed = false;
+                    
+                    auto s = k.get_secret(compressed);
+ 
+                    if (
+                        globals::instance().wallet_main()->address_book().count(
+                        key_id) > 0
+                        )
+                    {
+                        ofs <<
+                            secret(s, k.is_compressed()).to_string() << "," <<
+                            address(key_id).to_string() << ",label" <<
+                            "\r\n"
+                        ;
+                    }
+                    else if (reserve_keys.count(key_id) > 0)
+                    {
+                        ofs <<
+                            secret(s, k.is_compressed()).to_string() << "," <<
+                            address(key_id).to_string() << ",reserve" <<
+                            "\r\n"
+                        ;
+                    }
+                    else
+                    {
+                        ofs <<
+                            secret(s, k.is_compressed()).to_string() << "," <<
+                            address(key_id).to_string() << ",change" <<
+                            "\r\n"
+                        ;
+                    }
+                }
+            }
         }
         else
         {
-        
             /**
-             * Get the reserve keys.
+             * Iterate all keys.
              */
-            auto reserve_keys = globals::instance().wallet_main()->reserve_keys();
-
-            /**
-             * Format: key, address, type
-             */
-            std::ofstream ofs(filesystem::data_path() + "wallet.csv");
-            
-            /**
-             * Columns
-             */
-            ofs << "Key, Address, Type" << std::endl;
-            
-            if (globals::instance().wallet_main()->is_crypted() == true)
+            for (auto & i : globals::instance().wallet_main()->keys())
             {
-                /**
-                 * Iterate all keys.
-                 */
-                for (auto & i : globals::instance().wallet_main()->crypted_keys())
+                const auto & key_id = i.first;
+                
+                key k;
+                
+                if (
+                    globals::instance().wallet_main()->get_key(
+                    key_id, k) == true
+                    )
                 {
-                    const auto & key_id = i.first;
+                    auto compressed = false;
                     
-                    key k;
+                    auto s = k.get_secret(compressed);
                     
                     if (
-                        globals::instance().wallet_main()->get_key(
-                        key_id, k) == true
+                        globals::instance().wallet_main()->address_book().count(
+                        key_id) > 0
                         )
                     {
-                        auto compressed = false;
-                        
-                        auto s = k.get_secret(compressed);
-     
-                        if (
-                            globals::instance().wallet_main()->address_book().count(
-                            key_id) > 0
-                            )
-                        {
-                            ofs <<
-                                secret(s, k.is_compressed()).to_string() << ", " <<
-                                address(key_id).to_string() << ", label" <<
-                                std::endl
-                            ;
-                        }
-                        else if (reserve_keys.count(key_id) > 0)
-                        {
-                            ofs <<
-                                secret(s, k.is_compressed()).to_string() << ", " <<
-                                address(key_id).to_string() << ", reserve" <<
-                                std::endl
-                            ;
-                        }
-                        else
-                        {
-                            ofs <<
-                                secret(s, k.is_compressed()).to_string() << ", " <<
-                                address(key_id).to_string() << ", change" <<
-                                std::endl
-                            ;
-                        }
+                        ofs <<
+                            secret(s, k.is_compressed()).to_string() << "," <<
+                            address(key_id).to_string() << ",label" <<
+                            "\r\n"
+                        ;
+                    }
+                    else if (reserve_keys.count(key_id) > 0)
+                    {
+                        ofs <<
+                            secret(s, k.is_compressed()).to_string() << "," <<
+                            address(key_id).to_string() << ",reserve" <<
+                            "\r\n"
+                        ;
+                    }
+                    else
+                    {
+                        ofs <<
+                            secret(s, k.is_compressed()).to_string() << "," <<
+                            address(key_id).to_string() << ",change" <<
+                            "\r\n"
+                        ;
                     }
                 }
             }
-            else
-            {
-                /**
-                 * Iterate all keys.
-                 */
-                for (auto & i : globals::instance().wallet_main()->keys())
-                {
-                    const auto & key_id = i.first;
-                    
-                    key k;
-                    
-                    if (
-                        globals::instance().wallet_main()->get_key(
-                        key_id, k) == true
-                        )
-                    {
-                        auto compressed = false;
-                        
-                        auto s = k.get_secret(compressed);
-                        
-                        if (
-                            globals::instance().wallet_main()->address_book().count(
-                            key_id) > 0
-                            )
-                        {
-                            ofs <<
-                                secret(s, k.is_compressed()).to_string() << ", " <<
-                                address(key_id).to_string() << ", label" <<
-                                std::endl
-                            ;
-                        }
-                        else if (reserve_keys.count(key_id) > 0)
-                        {
-                            ofs <<
-                                secret(s, k.is_compressed()).to_string() << ", " <<
-                                address(key_id).to_string() << ", reserve" <<
-                                std::endl
-                            ;
-                        }
-                        else
-                        {
-                            ofs <<
-                                secret(s, k.is_compressed()).to_string() << ", " <<
-                                address(key_id).to_string() << ", change" <<
-                                std::endl
-                            ;
-                        }
-                    }
-                }
-            }
-            
-            ofs << std::endl;
-            
-            ofs.close();
-            
-            ret.result.put("", "null");
         }
+        
+        ofs << std::endl;
+        
+        ofs.close();
+        
+        ret.result.put("", "null");
     }
     catch (std::exception & e)
     {
