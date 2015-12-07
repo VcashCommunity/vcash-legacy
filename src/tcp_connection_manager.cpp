@@ -42,7 +42,7 @@ tcp_connection_manager::tcp_connection_manager(
     : m_time_last_inbound(0)
     , io_service_(ios)
     , resolver_(ios)
-    , strand_(ios)
+    , strand_(globals::instance().strand())
     , stack_impl_(owner)
     , timer_(ios)
 {
@@ -132,7 +132,10 @@ void tcp_connection_manager::handle_accept(
     /**
      * Only peers accept incoming connections.
      */
-    if (globals::instance().operation_mode() == protocol::operation_mode_peer)
+    if (
+        globals::instance().state() == globals::state_started &&
+        globals::instance().operation_mode() == protocol::operation_mode_peer
+        )
     {
         /**
          * We allow this many incoming connections per same IP address.
@@ -378,68 +381,73 @@ const std::time_t & tcp_connection_manager::time_last_inbound() const
 
 bool tcp_connection_manager::connect(const boost::asio::ip::tcp::endpoint & ep)
 {
-    std::lock_guard<std::recursive_mutex> l1(mutex_tcp_connections_);
-    
-    if (network::instance().is_address_banned(ep.address().to_string()))
+    if (globals::instance().state() == globals::state_started)
     {
-        log_info(
-            "TCP connection manager tried to connect to a banned address " <<
-            ep << "."
-        );
+        std::lock_guard<std::recursive_mutex> l1(mutex_tcp_connections_);
         
-        return false;
-    }
-    else if (is_ip_banned(ep.address().to_string()))
-    {
-        log_debug(
-            "TCP connection manager tried to connect to a bad address " <<
-            ep << "."
-        );
-        
-        return false;
-    }
-    else if (m_tcp_connections.find(ep) == m_tcp_connections.end())
-    {
-        log_none("TCP connection manager is connecting to " << ep << ".");
-        
-        /**
-         * Inform the address_manager.
-         */
-        stack_impl_.get_address_manager()->on_connection_attempt(
-            protocol::network_address_t::from_endpoint(ep)
-        );
-        
-        /**
-         * Allocate tcp_transport.
-         */
-        auto transport = std::make_shared<tcp_transport>(io_service_, strand_);
-        
-        /**
-         * Allocate the tcp_connection.
-         */
-        auto connection = std::make_shared<tcp_connection> (
-            io_service_, stack_impl_, tcp_connection::direction_outgoing,
-            transport
-        );
-        
-        /**
-         * Retain the connection.
-         */
-        m_tcp_connections[ep] = connection;
-        
-        /**
-         * Start the tcp_connection.
-         */
-        connection->start(ep);
-        
-        return true;
-    }
-    else
-    {
-        log_none(
-            "TCP connection manager attempted connection to existing "
-            "endpoint = " << ep << "."
-        );
+        if (network::instance().is_address_banned(ep.address().to_string()))
+        {
+            log_info(
+                "TCP connection manager tried to connect to a banned "
+                "address " << ep << "."
+            );
+            
+            return false;
+        }
+        else if (is_ip_banned(ep.address().to_string()))
+        {
+            log_debug(
+                "TCP connection manager tried to connect to a bad address " <<
+                ep << "."
+            );
+            
+            return false;
+        }
+        else if (m_tcp_connections.find(ep) == m_tcp_connections.end())
+        {
+            log_none("TCP connection manager is connecting to " << ep << ".");
+            
+            /**
+             * Inform the address_manager.
+             */
+            stack_impl_.get_address_manager()->on_connection_attempt(
+                protocol::network_address_t::from_endpoint(ep)
+            );
+            
+            /**
+             * Allocate tcp_transport.
+             */
+            auto transport = std::make_shared<tcp_transport>(
+                io_service_, strand_
+            );
+            
+            /**
+             * Allocate the tcp_connection.
+             */
+            auto connection = std::make_shared<tcp_connection> (
+                io_service_, stack_impl_, tcp_connection::direction_outgoing,
+                transport
+            );
+            
+            /**
+             * Retain the connection.
+             */
+            m_tcp_connections[ep] = connection;
+            
+            /**
+             * Start the tcp_connection.
+             */
+            connection->start(ep);
+            
+            return true;
+        }
+        else
+        {
+            log_none(
+                "TCP connection manager attempted connection to existing "
+                "endpoint = " << ep << "."
+            );
+        }
     }
     
     return false;
@@ -532,12 +540,12 @@ void tcp_connection_manager::tick(const boost::system::error_code & ec)
          */
         if (
             tcp_connections < (is_initial_block_download ?
-            minimum_tcp_connections() * 1.2 : minimum_tcp_connections())
+            minimum_tcp_connections() * 1 : minimum_tcp_connections())
             )
         {
             for (
                 auto i = 0; i < (is_initial_block_download ?
-                minimum_tcp_connections() * 1.2 : minimum_tcp_connections()) -
+                minimum_tcp_connections() * 1 : minimum_tcp_connections()) -
                 tcp_connections; i++
                 )
             {
@@ -552,7 +560,7 @@ void tcp_connection_manager::tick(const boost::system::error_code & ec)
                 /**
                  * Only connect to one peer per group.
                  */
-                bool is_in_same_group = false;
+                auto is_in_same_group = false;
 
                 for (auto & i : m_tcp_connections)
                 {
@@ -759,7 +767,7 @@ std::size_t tcp_connection_manager::minimum_tcp_connections()
     
     return
         globals::instance().operation_mode() ==
-        protocol::operation_mode_peer ? (is_firewalled ? 8 : 12) : 6
+        protocol::operation_mode_peer ? (is_firewalled ? 8 : 10) : 6
     ;
 }
 
@@ -783,11 +791,6 @@ bool tcp_connection_manager::is_ip_banned(const std::string & val)
      */
     static const std::map<std::string, std::int32_t> g_known_attack_ips =
     {
-        /**
-         * bbqpool.net - Opens TCP connections to all network nodes.
-         */
-        {"144.76.238.2", -1},
-        
         /**
          * ??? - Opens TCP connections to all network nodes.
          */

@@ -84,8 +84,15 @@ bool incentive_manager::handle_message(
 {
     if (globals::instance().is_incentive_enabled())
     {
+        std::lock_guard<std::mutex> l1(mutex_handle_message_);
+        
         if (msg.header().command == "ivote")
         {
+            /**
+             * Get the incentive_vote.
+             */
+            auto ivote = msg.protocol_ivote().ivote;
+            
             auto is_vote_valid = true;
             
             /**
@@ -101,7 +108,7 @@ bool incentive_manager::handle_message(
             /**
              * Check that the ivote is not negative.
              */
-            if (msg.protocol_ivote().ivote->score() < 0)
+            if (ivote->score() < 0)
             {
                 is_vote_valid = false;
             }
@@ -113,18 +120,17 @@ bool incentive_manager::handle_message(
              * by TCP and UDP however let's be safe since origins may change.
              */
             if (
-                msg.protocol_ivote().ivote->block_height() + 2 < height &&
-                static_cast<std::int32_t> (height) -
-                msg.protocol_ivote().ivote->block_height() > 2
+                ivote->block_height() + 2 < height &&
+                static_cast<std::int32_t> (height) - ivote->block_height() > 2
                 )
             {
                 is_vote_valid = false;
                 
                 log_debug(
                     "Incentive manager is dropping old vote " <<
-                    msg.protocol_ivote().ivote->block_height() + 2 <<
+                    ivote->block_height() + 2 <<
                     ", diff = " << static_cast<std::int32_t> (height) -
-                    msg.protocol_ivote().ivote->block_height() + 2 << "."
+                    ivote->block_height() + 2 << "."
                 );
             }
             
@@ -133,14 +139,13 @@ bool incentive_manager::handle_message(
              * @note We perform this at the TCP and UDP level but just in
              * case a message origin is something else we do it here too.
              */
-            if (validate_collateral(*msg.protocol_ivote().ivote) == false)
+            if (validate_collateral(*ivote) == false)
             {
                 is_vote_valid = false;
                 
-                log_debug(
+                log_info(
                     "Incentive manager is dropping vote, invalid collateral "
-                    "for " <<
-                    msg.protocol_ivote().ivote->address().substr(0, 8) << "."
+                    "for " << ivote->address().substr(0, 8) << "."
                 );
             }
         
@@ -148,21 +153,18 @@ bool incentive_manager::handle_message(
             {
                 log_debug(
                     "Incentive manager got vote for " <<
-                    msg.protocol_ivote().ivote->block_height() + 2 << ":" <<
-                    msg.protocol_ivote().ivote->address().substr(0, 8) <<
-                    ", score = " << msg.protocol_ivote().ivote->score() << "."
+                    ivote->block_height() + 2 << ":" <<
+                    ivote->address().substr(0, 8) <<
+                    ", score = " << ivote->score() << "."
                 );
                 
                 std::lock_guard<std::mutex> l1(mutex_votes_);
                 
-                votes_[msg.protocol_ivote().ivote->block_height() + 2
-                    ][msg.protocol_ivote().ivote->address()].push_back(
-                    *msg.protocol_ivote().ivote
+                votes_[ivote->block_height() + 2][ivote->address()].push_back(
+                    *ivote
                 );
 
-                auto incentive_votes = votes_[
-                    msg.protocol_ivote().ivote->block_height() + 2
-                ];
+                auto incentive_votes = votes_[ivote->block_height() + 2];
                 
                 std::stringstream ss;
                 
@@ -199,7 +201,7 @@ bool incentive_manager::handle_message(
                          * Insert this winner as a runner up.
                          */
                         incentive::instance().runners_up()[
-                            msg.protocol_ivote().ivote->block_height() + 2
+                            ivote->block_height() + 2
                         ].insert(i.first);
                     }
                     
@@ -212,15 +214,14 @@ bool incentive_manager::handle_message(
 
                 if (
                     incentive::instance().runners_up().count(
-                    msg.protocol_ivote().ivote->block_height() + 2) > 0
+                    ivote->block_height() + 2) > 0
                     )
                 {
                     log_debug(
                         "Incentive manager got runner up " <<
-                        msg.protocol_ivote().ivote->block_height() + 2 <<
+                        ivote->block_height() + 2 <<
                         ":" << incentive::instance().runners_up()[
-                        msg.protocol_ivote(
-                        ).ivote->block_height() + 2].size() << "."
+                        ivote->block_height() + 2].size() << "."
                     );
                 }
                 
@@ -234,7 +235,7 @@ bool incentive_manager::handle_message(
                     log_debug(
                         "Incentive manager got winner " <<
                         winner.substr(0, 8) << " for block " <<
-                        msg.protocol_ivote().ivote->block_height() + 2 << "."
+                        ivote->block_height() + 2 << "."
                     );
                 
                     /**
@@ -242,12 +243,10 @@ bool incentive_manager::handle_message(
                      * could change.
                      */
                     incentive::instance().winners()[
-                        msg.protocol_ivote().ivote->block_height() + 2].first =
-                        std::time(0)
+                        ivote->block_height() + 2].first = std::time(0)
                     ;
                     incentive::instance().winners()[
-                        msg.protocol_ivote().ivote->block_height() + 2].second =
-                        winner
+                        ivote->block_height() + 2].second = winner
                     ;
                 }
 
@@ -260,6 +259,7 @@ bool incentive_manager::handle_message(
                     for (auto & j : i.second)
                     {
                         std::string addr;
+                        
                         auto votes = 0;
                     
                         addr = j.first.substr(0, 8);
@@ -551,6 +551,33 @@ void incentive_manager::do_tick(const std::uint32_t & interval)
                         auto kclosest = k_closest(
                             recent_good_endpoints, vote_block_height
                         );
+                        
+                        /**
+                         * Erase all nodes with protocol versions less than
+                         * ours (minus one) so that they no longer receive
+                         * incentive rewards to encourage an up-to-date
+                         * network backbone.
+                         */
+                        auto it = kclosest.begin();
+                        
+                        while (it != kclosest.end())
+                        {
+                            const address_manager::recent_endpoint_t &
+                                recent = *it
+                            ;
+                            
+                            if (
+                                recent.protocol_version <
+                                (protocol::version - 1)
+                                )
+                            {
+                                it = kclosest.erase(it);
+                            }
+                            else
+                            {
+                                ++it;
+                            }
+                        }
 
                         /**
                          * The winner.
@@ -661,7 +688,7 @@ void incentive_manager::do_tick(const std::uint32_t & interval)
                                             ).acceptable(tx).first == false
                                             )
                                         {
-                                            log_debug(
+                                            log_info(
                                                 "Incentive manager detected "
                                                 "invalid collateral for " <<
                                                 recent.wallet_address.substr(
@@ -738,6 +765,11 @@ void incentive_manager::do_tick(const std::uint32_t & interval)
                                     }
                                 }
                             }
+                            
+                            log_info(
+                                "Incentive manager has " <<
+                                collaterals_.size() << " collateralised nodes."
+                            );
                         }
                         
                         if (kclosest.size() >= 2)
@@ -1227,7 +1259,10 @@ bool incentive_manager::vote(const std::string & wallet_address)
          * If our vote score is at least zero we
          * can vote otherwise peers will reject it.
          */
-        if (vote_score > -1)
+        if (
+            vote_score > -1 &&
+            vote_score <= std::numeric_limits<std::int16_t>::max() / 4
+            )
         {
             if (utility::is_initial_block_download() == false)
             {
@@ -1349,7 +1384,19 @@ std::vector<output> incentive_manager::select_coins()
     
     std::vector<output> coins;
     
-    globals::instance().wallet_main()->available_coins(coins, true, 0);
+    /**
+     * Do not use ZeroTime (we are not creating a transaction).
+     */
+    auto use_zerotime = false;
+    
+    /**
+     * Do not filter any coin denominations.
+     */
+    std::set<std::int64_t> filter;
+
+    globals::instance().wallet_main()->available_coins(
+        coins, true, filter, 0, use_zerotime
+    );
 
     auto index_previous = stack_impl::get_block_index_best();
     

@@ -140,7 +140,7 @@ namespace coin {
              * @param block_height The block heigt.
              * @param k The maximum number of scores.
              */
-            std::vector<std::uint32_t> k_closest(
+            std::vector<std::int16_t> k_closest(
                 const std::vector<std::int16_t> & vote_scores,
                 const std::uint32_t & block_height,
                 const std::uint32_t & k
@@ -230,7 +230,7 @@ namespace coin {
             /**
              * The probe (question) interval.
              */
-            enum { interval_probe = 900 };
+            enum { interval_probe = 1500 };
         
             /**
              * The std::mutex

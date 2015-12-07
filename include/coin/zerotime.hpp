@@ -35,6 +35,7 @@
 
 namespace coin {
 
+    class key_public;
     class transaction;
     
     /**
@@ -47,12 +48,12 @@ namespace coin {
             /**
              * K for the test network.
              */
-            enum { k_test_network = 24 };
+            enum { k_test_network = 6 };
         
             /**
              * K
              */
-            enum { k = 24 };
+            enum { k = 12 };
         
             /**
              * The depth.
@@ -137,11 +138,17 @@ namespace coin {
             void clear_expired_input_locks();
         
             /**
+             * Calculates the score of a key_public.
+             * @param val public_key The key_public.
+             */
+            std::int16_t calculate_score(const key_public & public_key);
+        
+            /**
              * Calculates the score of a zerotime_vote.
              * @param val ztvote The zerotime_vote.
              */
             std::int16_t calculate_score(const zerotime_vote & ztvote);
-
+        
             /**
              * Signs
              * @param hash_value The hash of the value.

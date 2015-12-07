@@ -22,6 +22,8 @@
 #include <sys/file.h>
 #endif // _MSC_VER
 
+#include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <random>
@@ -102,6 +104,11 @@ void stack_impl::start()
      * Make sure only a single instance per directory is allowed.
      */
     lock_file_or_exit();
+    
+    /**
+     * Backup the last wallet file deleting the oldest.
+     */
+    backup_last_wallet_file();
 
     /**
      * Set the state to starting.
@@ -259,6 +266,9 @@ void stack_impl::start()
          */
         load_block_index([this] (const bool & success)
         {
+            /**
+             * When pruning is enabled this must always succeed.
+             */
             if (success)
             {
                 log_info("Stack loaded block index.");
@@ -567,7 +577,8 @@ void stack_impl::start()
                                  * Backup the new wallet.
                                  */
                                 db_wallet::backup(
-                                    *globals::instance().wallet_main()
+                                    *globals::instance().wallet_main(),
+                                    filesystem::data_path() + "backups/"
                                 );
                             }));
                         }
@@ -689,7 +700,15 @@ void stack_impl::start()
                          * Allocate the info.
                          */
                         std::map<std::string, std::string> status;
-                        
+
+                        /**
+                         * Add the transaction_wallet values to the status.
+                         */
+                        for (auto & j : i.second.values())
+                        {
+                            status[j.first] = j.second;
+                        }
+
                         /**
                          * Set the type.
                          */
@@ -949,8 +968,7 @@ void stack_impl::start()
                         );
                     }
                 });
-
-#if 1
+#if 0
                 /**
                  * Use a single std::thread to run the asio::io_service to
                  * obtain the maximum performance to energy usage ratio.
@@ -961,10 +979,23 @@ void stack_impl::start()
                  * Now that the block index is loaded increase the thread
                  * count to max(1, cores - 1) if required.
                  */
-                auto cores = std::max(
-                    static_cast<std::uint32_t> (1),
-                    std::thread::hardware_concurrency() - 1
-                );
+                auto cores = std::thread::hardware_concurrency();
+                
+                /**
+                 * If we only have a single core run single threaded
+                 * (on main thread). Lastly, do not use more than 7 threads.
+                 */
+                if (cores == 1)
+                {
+                    cores = 0;
+                }
+                else
+                {
+                    cores = std::max(
+                        static_cast<std::uint32_t> (1),
+                        std::min(static_cast<std::uint32_t> (7), cores - 1)
+                    );
+                }
 #endif
                 log_info("Stack is adding " << cores << " threads.");
                 
@@ -1640,12 +1671,10 @@ void stack_impl::stop()
     /**
      * Stop the status_manager.
      */
-    m_status_manager->stop();
-    
-    /**
-     * Flush the db_env.
-     */
-    g_db_env->flush();
+    if (m_status_manager)
+    {
+        m_status_manager->stop();
+    }
     
     /**
      * Unregister the main wallet.
@@ -1675,15 +1704,47 @@ void stack_impl::stop()
     timer_status_blockchain_.cancel();
     
     /**
-     * Reset the work.
+     * Detach the block_index objects from each other.
      */
-    work_.reset();
-
+    for (auto & i : globals::instance().block_indexes())
+    {
+        /**
+         * Set the previous block index to null.
+         */
+        i.second->set_block_index_previous(std::shared_ptr<block_index> ());
+        
+        /**
+         * Set the next block index to null.
+         */
+        i.second->set_block_index_next(std::shared_ptr<block_index> ());
+    }
+    
     /**
      * :FIXME: There is an io_service object that is not being cancelled so
      * calling join will block preventing exit.
      */
     globals::instance().io_service().stop();
+    
+    /**
+     * Reset the work.
+     */
+    work_.reset();
+    
+    /**
+     * Flush the db_env.
+     */
+    if (g_db_env)
+    {
+        g_db_env->flush();
+    }
+    
+    /**
+     * Close the db_env.
+     */
+    if (g_db_env)
+    {
+        g_db_env->close_DbEnv();
+    }
     
     /**
      * Join the threads.
@@ -1707,31 +1768,6 @@ void stack_impl::stop()
      * Clear the threads.
      */
     threads_.clear();
-    
-    /**
-     * Close the db_env.
-     */
-    if (g_db_env)
-    {
-        g_db_env->close_DbEnv();
-    }
-    
-    /**
-     * Reset globals.
-     */
-    globals::instance().block_indexes().clear();
-    globals::instance().proofs_of_stake().clear();
-    globals::instance().set_wallet_main(std::shared_ptr<wallet> ());
-    globals::instance().orphan_blocks().clear();
-    globals::instance().orphan_transactions().clear();
-    globals::instance().orphan_blocks_by_previous().clear();
-    globals::instance().orphan_transactions_by_previous().clear();
-    globals::instance().stake_seen_orphan().clear();
-    globals::instance().relay_invs().clear();
-    globals::instance().relay_inv_expirations().clear();
-    g_block_index_genesis = std::shared_ptr<block_index> ();;
-    g_seen_stake.clear();
-    g_block_index_best = std::shared_ptr<block_index> ();
     
     /**
      * Reset
@@ -1782,6 +1818,23 @@ void stack_impl::stop()
      * Reset
      */
     g_db_env.reset();
+    
+    /**
+     * Reset globals.
+     */
+    globals::instance().block_indexes().clear();
+    globals::instance().proofs_of_stake().clear();
+    globals::instance().set_wallet_main(std::shared_ptr<wallet> ());
+    globals::instance().orphan_blocks().clear();
+    globals::instance().orphan_transactions().clear();
+    globals::instance().orphan_blocks_by_previous().clear();
+    globals::instance().orphan_transactions_by_previous().clear();
+    globals::instance().stake_seen_orphan().clear();
+    globals::instance().relay_invs().clear();
+    globals::instance().relay_inv_expirations().clear();
+    g_block_index_genesis = std::shared_ptr<block_index> ();
+    g_seen_stake.clear();
+    g_block_index_best = std::shared_ptr<block_index> ();
     
     /**
      * Set the state to stopped.
@@ -2710,6 +2763,14 @@ bool stack_impl::process_block(
     if (globals::instance().state() < globals::state_stopping)
     {
         /**
+         * @note Because of the synchronisation mechanisms in place in may be
+         * safe to remove this mutex in the future.
+         */
+        static std::mutex g_mutex;
+        
+        std::lock_guard<std::mutex> l1(g_mutex);
+        
+        /**
          * Check for duplicate.
          */
         auto hash_block = blk->get_hash();
@@ -3553,15 +3614,35 @@ void stack_impl::on_status_wallet()
 
 void stack_impl::on_status_blockchain()
 {
-    log_debug("block_indexes: " << globals::instance().block_indexes().size());
-    log_debug("proofs_of_stake: " << globals::instance().proofs_of_stake().size());
-    log_debug("orphan_blocks: " << globals::instance().orphan_blocks().size());
-    log_debug("orphan_blocks_by_previous: " << globals::instance().orphan_blocks_by_previous().size());
-    log_debug("orphan_transactions: " << globals::instance().orphan_transactions().size());
-    log_debug("orphan_transactions_by_previous: " << globals::instance().orphan_transactions_by_previous().size());
-    log_debug("stake_seen_orphan: " << globals::instance().stake_seen_orphan().size());
+    log_debug(
+        "block_indexes: " << globals::instance().block_indexes().size()
+    );
+    log_debug(
+        "proofs_of_stake: " << globals::instance().proofs_of_stake().size()
+    );
+    log_debug(
+        "orphan_blocks: " << globals::instance().orphan_blocks().size()
+    );
+    log_debug(
+        "orphan_blocks_by_previous: " <<
+        globals::instance().orphan_blocks_by_previous().size()
+    );
+    log_debug(
+        "orphan_transactions: " <<
+        globals::instance().orphan_transactions().size()
+    );
+    log_debug(
+        "orphan_transactions_by_previous: " <<
+        globals::instance().orphan_transactions_by_previous().size()
+    );
+    log_debug(
+        "stake_seen_orphan: " << globals::instance().stake_seen_orphan().size()
+    );
     log_debug("relay_invs: " << globals::instance().relay_invs().size());
-    log_debug("relay_inv_expirations: " << globals::instance().relay_inv_expirations().size());
+    log_debug(
+        "relay_inv_expirations: " <<
+        globals::instance().relay_inv_expirations().size()
+    );
     
     if (globals::instance().money_supply() > 0)
     {
@@ -3633,6 +3714,23 @@ void stack_impl::create_directories()
         throw std::runtime_error("failed to create path " + path);
     }
     
+    /**
+     * Create backups directory.
+     */
+    result = filesystem::create_path(path + "backups/");
+    
+    if (result == 0 || result == filesystem::error_already_exists)
+    {
+        log_none("Stack, " + path + "backups/ already exists.");
+    }
+    else
+    {
+        // ...
+    }
+    
+    /**
+     * Create blockchain directory.
+     */
     if (
         globals::instance().operation_mode() == protocol::operation_mode_client
         )
@@ -4022,7 +4120,7 @@ void stack_impl::load_wallet(
     const db_wallet::error_t & err)> & f
     )
 {
-    bool first_run = true;
+    auto first_run = true;
 
     globals::instance().set_wallet_main(std::make_shared<wallet> (*this));
     
@@ -4033,6 +4131,97 @@ void stack_impl::load_wallet(
     if (f)
     {
         f(first_run, ret);
+    }
+}
+
+void stack_impl::backup_last_wallet_file()
+{
+    auto path_backups = filesystem::data_path() + "backups/";
+    
+    auto contents = filesystem::path_contents(path_backups);
+    
+    if (contents.size() > 0)
+    {
+        std::map<std::time_t, std::string> wallets_sorted_by_time;
+        
+        for (auto & i : contents)
+        {
+            if (
+                i.find("wallet") == std::string::npos &&
+                i.find(".dat") == std::string::npos
+                )
+            {
+                continue;
+            }
+            
+            std::vector<std::string> parts;
+            
+            boost::split(parts, i, boost::is_any_of("."));
+            
+            if (parts.size() == 3)
+            {
+                std::time_t time;
+                
+                /**
+                 * Android does not implement std::atoll.
+                 */
+#if (defined __ANDROID__)
+                time =
+                    boost::lexical_cast<std::int64_t> (parts[1].c_str())
+                ;
+#else
+                time = std::atoll(parts[1].c_str());
+#endif // __ANDROID__
+
+                /**
+                 * We only perform a delete if the latest file is at least one
+                 * day old.
+                 */
+                if (std::time(0) - time > 24 * 60 * 60)
+                {
+                    wallets_sorted_by_time[time] = i;
+                }
+            }
+        }
+        
+        /**
+         * Keep at least 8 (automatic) backup wallet files. If you use RPC
+         * "backupwallet" more than 8 will accumulate and this is desired.
+         */
+        enum { minimum_to_keep = 8 };
+
+        if (wallets_sorted_by_time.size() >= minimum_to_keep)
+        {
+            auto path_to_remove = wallets_sorted_by_time.begin()->second;
+            
+            if (file::remove(path_backups + "/" + path_to_remove))
+            {
+                log_info(
+                    "Stack removed old wallet backup " << path_to_remove << "."
+                );
+            }
+            
+            /**
+             * Backup the wallet.
+             */
+            if (std::ifstream(filesystem::data_path() + "wallet.dat").good())
+            {
+                if (
+                    filesystem::copy_file(filesystem::data_path() + "wallet.dat",
+                    path_backups +  "wallet." +
+                    std::to_string(std::time(0)) + ".dat") == true
+                    )
+                {
+                    log_info(
+                        "Stack backed up wallet to " << path_backups << "."
+                    );
+                }
+            }
+        }
+        else
+        {
+            log_info("Stack doesn't need to backup wallet file, too soon.");
+        }
     }
 }
 

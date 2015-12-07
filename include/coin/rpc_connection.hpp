@@ -358,6 +358,14 @@ namespace coin {
             );
         
             /**
+             * Encodes dumpwallet data into JSON format.
+             * @param request The json_rpc_request_t.
+             */
+            json_rpc_response_t json_dumpwallet(
+                const json_rpc_request_t & request
+            );
+        
+            /**
              * Encodes encryptwallet data into JSON format.
              * @param request The json_rpc_request_t.
              */
@@ -457,6 +465,14 @@ namespace coin {
              * @param request The json_rpc_request_t.
              */
             json_rpc_response_t json_getnetworkhashps(
+                const json_rpc_request_t & request
+            );
+        
+            /**
+             * Encodes getnetworkinfo data into JSON format.
+             * @param request The json_rpc_request_t.
+             */
+            json_rpc_response_t json_getnetworkinfo(
                 const json_rpc_request_t & request
             );
         
@@ -577,6 +593,14 @@ namespace coin {
              * @param request The json_rpc_request_t.
              */
             json_rpc_response_t json_validateaddress(
+                const json_rpc_request_t & request
+            );
+        
+            /**
+             * Performs a walletdenominate operation.
+             * @param request The json_rpc_request_t.
+             */
+            json_rpc_response_t json_walletdenominate(
                 const json_rpc_request_t & request
             );
         

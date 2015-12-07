@@ -116,7 +116,7 @@ void zerotime_manager::vote(
                  */
                 const auto & vote_score = ztvote.score();
                 
-                log_debug(
+                log_info(
                     "ZeroTime manager forming vote, calculated score = " <<
                     vote_score << " for " <<
                     ztvote.hash_nonce().to_string().substr(0, 8) << "."
@@ -126,7 +126,10 @@ void zerotime_manager::vote(
                  * If our vote score is at least zero we can vote otherwise
                  * peers will reject it.
                  */
-                if (vote_score > -1)
+                if (
+                    vote_score > -1 &&
+                    vote_score <= std::numeric_limits<std::int16_t>::max() / 6
+                    )
                 {
                     /**
                      * Allocate the inventory_vector.
@@ -247,9 +250,8 @@ void zerotime_manager::probe_for_answers(
                 
                 /**
                  * Start the timer.
-                 * @note Use a 4x delay to allow the ztlock to propagate.
                  */
-                do_tick_probe(interval_probe * 4);
+                do_tick_probe(interval_probe);
             }
             else
             {
@@ -277,12 +279,12 @@ void zerotime_manager::handle_answer(
             zerotime_answers_tcp_[ztanswer.hash_tx()].first = std::time(0);
             zerotime_answers_tcp_[ztanswer.hash_tx()].second[ep] = ztanswer;
             
-            log_debug(
+            log_info(
                 "ZeroTime manager got correct answer " <<
                 ztanswer.hash_tx().to_string().substr(0, 8) << ", so far = " <<
                 zerotime_answers_tcp_[ztanswer.hash_tx()].second.size() << "."
             );
-            
+
             /**
              * Check the number of answers.
              */
@@ -333,17 +335,20 @@ void zerotime_manager::handle_vote(
         const auto & hash_tx = ztvote.hash_tx();
         const auto & vote_score = ztvote.score();
         
-        log_debug(
-            "ZeroTime manager got vote, calculated score = " <<
-            vote_score << " for " <<
-            ztvote.hash_nonce().to_string().substr(0, 8) << "."
-        );
-        
         /**
          * The vote score must be at least zero.
          */
-        if (vote_score > -1)
+        if (
+            vote_score > -1 &&
+            vote_score <= std::numeric_limits<std::int16_t>::max() / 6
+            )
         {
+            log_debug(
+                "ZeroTime manager got valid vote, calculated score = " <<
+                vote_score << " for " <<
+                ztvote.hash_nonce().to_string().substr(0, 8) << "."
+            );
+        
             /**
              * Get a copy of the votes.
              */
@@ -362,6 +367,8 @@ void zerotime_manager::handle_vote(
             {
                 if (
                     it->second.score() > -1 &&
+                    it->second.score() <=
+                    std::numeric_limits<std::int16_t>::max() / 6 &&
                     it->second.hash_tx() == hash_tx
                     )
                 {
@@ -395,7 +402,8 @@ void zerotime_manager::handle_vote(
             ;
             
             log_debug(
-                "ZeroTime manager has " << percentage << "% votes for " <<
+                "ZeroTime manager has " << percentage << "% (" <<
+                vote_scores.size() << ") votes for " <<
                 hash_tx.to_string().substr(0, 8) << "."
             );
             
@@ -406,7 +414,7 @@ void zerotime_manager::handle_vote(
                     hash_tx.to_string().substr(0, 8) << "."
                 );
 
-                bool loop = true;
+                auto loop = true;
                 
                 /**
                  * Resolve conflicts on the inputs (this loop may not be
@@ -423,7 +431,7 @@ void zerotime_manager::handle_vote(
                             );
                             
                             /**
-                             * Do not continue to procces votes if we have a
+                             * Do not continue to process votes if we have a
                              * safe percentage.
                              */
                             if (safe_percentages_.count(hash_tx) == 0)
@@ -439,7 +447,7 @@ void zerotime_manager::handle_vote(
                                  * percentage.
                                  */
                                 safe_percentages_[hash_tx] = std::time(0);
-                                
+
                                 /**
                                  * If we have a lock conflict resolve it and wait
                                  * for block event inclusion of the transaction,
@@ -825,14 +833,14 @@ void zerotime_manager::do_tick_probe(const std::uint32_t & interval)
     }));
 }
 
-std::vector<std::uint32_t> zerotime_manager::k_closest(
+std::vector<std::int16_t> zerotime_manager::k_closest(
     const std::vector<std::int16_t> & vote_scores,
     const std::uint32_t & block_height, const std::uint32_t & k
     )
 {
-    std::vector<std::uint32_t> ret;
+    std::vector<std::int16_t> ret;
     
-    std::map<std::uint32_t, std::uint32_t> entries;
+    std::map<std::uint32_t, std::int16_t> entries;
     
     /**
      * Sort all votes by distance.
