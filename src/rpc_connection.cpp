@@ -32,6 +32,7 @@
 #include <coin/block.hpp>
 #include <coin/block_index.hpp>
 #include <coin/block_locator.hpp>
+#include <coin/key_store_crypto.hpp>
 #include <coin/database_stack.hpp>
 #include <coin/db_tx.hpp>
 #include <coin/incentive.hpp>
@@ -118,6 +119,13 @@ bool rpc_connection::is_transport_valid()
 
 void rpc_connection::on_read(const char * buf, const std::size_t & len)
 {
+    /**
+     * RPC requests are handled first come first serve (one at a time).
+     */
+    static std::recursive_mutex g_mutex;
+    
+    std::lock_guard<std::recursive_mutex> l1(g_mutex);
+    
     if (buffer_.size() > 0)
     {
         buffer_ += std::string(buf, len);
@@ -507,176 +515,185 @@ bool rpc_connection::handle_json_rpc_request(
     const json_rpc_request_t & request, json_rpc_response_t & response
     )
 {
-    log_debug(
-        "RPC connection got JSON-RPC request, id = " << request.id <<
-        ", method = " << request.method
-    );
-
-    if (request.method == "checkwallet")
+    if (globals::instance().state() == globals::state_started)
     {
-        response = json_checkwallet(request);
-    }
-    else if (request.method == "databasefind")
-    {
-        response = json_databasefind(request);
-    }
-    else if (request.method == "databasestore")
-    {
-        response = json_databasestore(request);
-    }
-    else if (request.method == "dumpprivkey")
-    {
-        response = json_dumpprivkey(request);
-    }
-    else if (request.method == "encryptwallet")
-    {
-        response = json_encryptwallet(request);
-    }
-    else if (request.method == "getaccount")
-    {
-        response = json_getaccount(request);
-    }
-    else if (request.method == "getaccountaddress")
-    {
-        response = json_getaccountaddress(request);
-    }
-    else if (request.method == "backupwallet")
-    {
-        response = json_backupwallet(request);
-    }
-    else if (request.method == "getbalance")
-    {
-        response = json_getbalance(request);
-    }
-    else if (request.method == "getblock")
-    {
-        response = json_getblock(request);
-    }
-    else if (request.method == "getblockcount")
-    {
-        response = json_getblockcount(request);
-    }
-    else if (request.method == "getblockhash")
-    {
-        response = json_getblockhash(request);
-    }
-    else if (request.method == "getblocktemplate")
-    {
-        response = json_getblocktemplate(request);
-    }
-    else if (request.method == "getconnectioncount")
-    {
-        response.result = json_getconnectioncount();
-    }
-    else if (request.method == "getdifficulty")
-    {
-        response = json_getdifficulty(request);
-    }
-    else if (request.method == "getincentiveinfo")
-    {
-        response.result = json_getincentiveinfo();
-    }
-    else if (request.method == "getinfo")
-    {
-        response.result = json_getinfo();
-    }
-    else if (request.method == "listsinceblock")
-    {
-        response = json_listsinceblock(request);
-    }
-    else if (request.method == "getmininginfo")
-    {
-        response = json_getmininginfo(request);
-    }
-    else if (request.method == "getnetworkhashps")
-    {
-        response = json_getnetworkhashps(request);
-    }
-    else if (request.method == "getnewaddress")
-    {
-        response = json_getnewaddress(request);
-    }
-    else if (request.method == "getpeerinfo")
-    {
-        response = json_getpeerinfo(request);
-    }
-    else if (request.method == "getrawtransaction")
-    {
-        response = json_getrawtransaction(request);
-    }
-    else if (request.method == "gettransaction")
-    {
-        response = json_gettransaction(request);
-    }
-    else if (request.method == "settxfee")
-    {
-        response = json_settxfee(request);
-    }
-    else if (request.method == "importprivkey")
-    {
-        response = json_importprivkey(request);
-    }
-    else if (request.method == "listtransactions")
-    {
-        response = json_listtransactions(request);
-    }
-    else if (request.method == "listreceivedbyaddress")
-    {
-        response = json_listreceivedbyaddress(request);
-    }
-    else if (request.method == "listreceivedbyaccount")
-    {
-        response = json_listreceivedbyaccount(request);
-    }
-    else if (request.method == "repairwallet")
-    {
-        response = json_repairwallet(request);
-    }
-    else if (request.method == "submitblock")
-    {
-        response = json_submitblock(request);
-    }
-    else if (request.method == "sendmany")
-    {
-        response = json_sendmany(request);
-    }
-    else if (request.method == "sendtoaddress")
-    {
-        response = json_sendtoaddress(request);
-    }
-    else if (request.method == "walletpassphrase")
-    {
-        response = json_walletpassphrase(request);
-    }
-    else if (request.method == "walletlock")
-    {
-        response = json_walletlock(request);
-    }
-    else if (request.method == "walletpassphrasechange")
-    {
-        response = json_walletpassphrasechange(request);
-    }
-    else if (request.method == "walletstatus")
-    {
-        response.result = json_walletstatus();
-    }
-    else if (request.method == "validateaddress")
-    {
-        response = json_validateaddress(request);
-    }
-    else
-    {
-        response.error = create_error_object(
-            error_code_method_not_found, "method not found"
+        log_debug(
+            "RPC connection got JSON-RPC request, id = " << request.id <<
+            ", method = " << request.method
         );
+
+        if (request.method == "checkwallet")
+        {
+            response = json_checkwallet(request);
+        }
+        else if (request.method == "databasefind")
+        {
+            response = json_databasefind(request);
+        }
+        else if (request.method == "databasestore")
+        {
+            response = json_databasestore(request);
+        }
+        else if (request.method == "dumpprivkey")
+        {
+            response = json_dumpprivkey(request);
+        }
+        else if (request.method == "dumpwallet")
+        {
+            response = json_dumpwallet(request);
+        }
+        else if (request.method == "encryptwallet")
+        {
+            response = json_encryptwallet(request);
+        }
+        else if (request.method == "getaccount")
+        {
+            response = json_getaccount(request);
+        }
+        else if (request.method == "getaccountaddress")
+        {
+            response = json_getaccountaddress(request);
+        }
+        else if (request.method == "backupwallet")
+        {
+            response = json_backupwallet(request);
+        }
+        else if (request.method == "getbalance")
+        {
+            response = json_getbalance(request);
+        }
+        else if (request.method == "getblock")
+        {
+            response = json_getblock(request);
+        }
+        else if (request.method == "getblockcount")
+        {
+            response = json_getblockcount(request);
+        }
+        else if (request.method == "getblockhash")
+        {
+            response = json_getblockhash(request);
+        }
+        else if (request.method == "getblocktemplate")
+        {
+            response = json_getblocktemplate(request);
+        }
+        else if (request.method == "getdifficulty")
+        {
+            response = json_getdifficulty(request);
+        }
+        else if (request.method == "getincentiveinfo")
+        {
+            response.result = json_getincentiveinfo();
+        }
+        else if (request.method == "getinfo")
+        {
+            response.result = json_getinfo();
+        }
+        else if (request.method == "listsinceblock")
+        {
+            response = json_listsinceblock(request);
+        }
+        else if (request.method == "getmininginfo")
+        {
+            response = json_getmininginfo(request);
+        }
+        else if (request.method == "getnetworkhashps")
+        {
+            response = json_getnetworkhashps(request);
+        }
+        else if (request.method == "getnetworkinfo")
+        {
+            response = json_getnetworkinfo(request);
+        }
+        else if (request.method == "getnewaddress")
+        {
+            response = json_getnewaddress(request);
+        }
+        else if (request.method == "getpeerinfo")
+        {
+            response = json_getpeerinfo(request);
+        }
+        else if (request.method == "getrawtransaction")
+        {
+            response = json_getrawtransaction(request);
+        }
+        else if (request.method == "gettransaction")
+        {
+            response = json_gettransaction(request);
+        }
+        else if (request.method == "settxfee")
+        {
+            response = json_settxfee(request);
+        }
+        else if (request.method == "importprivkey")
+        {
+            response = json_importprivkey(request);
+        }
+        else if (request.method == "listtransactions")
+        {
+            response = json_listtransactions(request);
+        }
+        else if (request.method == "listreceivedbyaddress")
+        {
+            response = json_listreceivedbyaddress(request);
+        }
+        else if (request.method == "listreceivedbyaccount")
+        {
+            response = json_listreceivedbyaccount(request);
+        }
+        else if (request.method == "repairwallet")
+        {
+            response = json_repairwallet(request);
+        }
+        else if (request.method == "submitblock")
+        {
+            response = json_submitblock(request);
+        }
+        else if (request.method == "sendmany")
+        {
+            response = json_sendmany(request);
+        }
+        else if (request.method == "sendtoaddress")
+        {
+            response = json_sendtoaddress(request);
+        }
+        else if (request.method == "walletdenominate")
+        {
+            response = json_walletdenominate(request);
+        }
+        else if (request.method == "walletpassphrase")
+        {
+            response = json_walletpassphrase(request);
+        }
+        else if (request.method == "walletlock")
+        {
+            response = json_walletlock(request);
+        }
+        else if (request.method == "walletpassphrasechange")
+        {
+            response = json_walletpassphrasechange(request);
+        }
+        else if (request.method == "validateaddress")
+        {
+            response = json_validateaddress(request);
+        }
+        else
+        {
+            response.error = create_error_object(
+                error_code_method_not_found, "method not found"
+            );
+        }
+        
+        /**
+         * Set the id from the request.
+         */
+        response.id = request.id;
+        
+        return true;
     }
     
-    /**
-     * Set the id from the request.
-     */
-    response.id = request.id;
-    
-    return true;
+    return false;
 }
 
 bool rpc_connection::send_json_rpc_response(
@@ -934,7 +951,10 @@ rpc_connection::json_rpc_response_t rpc_connection::json_backupwallet(
         }
         else
         {
-            if (db_wallet::backup(*globals::instance().wallet_main()) == true)
+            if (
+                db_wallet::backup(*globals::instance().wallet_main(),
+                filesystem::data_path() + "backups/") == true
+                )
             {
                 ret.result.put("", "null");
             }
@@ -1309,7 +1329,23 @@ rpc_connection::json_rpc_response_t rpc_connection::json_dumpprivkey(
                 };
             }
             
-            if (globals::instance().wallet_unlocked_mint_only())
+            /**
+             * Make sure the wallet is unlocked.
+             */
+            if (globals::instance().wallet_main()->is_locked())
+            {
+                auto pt_error = create_error_object(
+                    error_code_wallet_unlock_needed, "wallet is locked"
+                );
+                
+                /**
+                 * error_code_wallet_unlock_needed
+                 */
+                return json_rpc_response_t{
+                    boost::property_tree::ptree(), pt_error, request.id
+                };
+            }
+            else if (globals::instance().wallet_unlocked_mint_only())
             {
                 auto pt_error = create_error_object(
                     error_code_wallet_unlock_needed,
@@ -1342,7 +1378,7 @@ rpc_connection::json_rpc_response_t rpc_connection::json_dumpprivkey(
             
             key::secret_t s;
             
-            bool compressed = false;
+            auto compressed = false;
             
             if (
                 globals::instance().wallet_main()->get_secret(
@@ -1379,6 +1415,189 @@ rpc_connection::json_rpc_response_t rpc_connection::json_dumpprivkey(
                 boost::property_tree::ptree(), pt_error, request.id
             };
         }
+    }
+    catch (std::exception & e)
+    {
+        auto pt_error = create_error_object(
+            error_code_internal_error, e.what()
+        );
+        
+        /**
+         * error_code_internal_error
+         */
+        return json_rpc_response_t{
+            boost::property_tree::ptree(), pt_error, request.id
+        };
+    }
+    
+    return ret;
+}
+
+rpc_connection::json_rpc_response_t rpc_connection::json_dumpwallet(
+    const json_rpc_request_t & request
+    )
+{
+    json_rpc_response_t ret;
+    
+    /**
+     * Set the id from the request.
+     */
+    ret.id = request.id;
+    
+    try
+    {
+        /**
+         * Make sure the wallet is unlocked.
+         */
+        if (globals::instance().wallet_main()->is_locked())
+        {
+            auto pt_error = create_error_object(
+                error_code_wallet_unlock_needed, "wallet is locked"
+            );
+            
+            /**
+             * error_code_wallet_unlock_needed
+             */
+            return json_rpc_response_t{
+                boost::property_tree::ptree(), pt_error, request.id
+            };
+        }
+        else if (globals::instance().wallet_unlocked_mint_only())
+        {
+            auto pt_error = create_error_object(
+                error_code_wallet_unlock_needed,
+                "wallet is unlocked for minting only"
+            );
+            
+            /**
+             * error_code_wallet_unlock_needed
+             */
+            return json_rpc_response_t{
+                boost::property_tree::ptree(), pt_error, request.id
+            };
+        }
+        
+        /**
+         * Get the reserve keys.
+         */
+        auto reserve_keys = globals::instance().wallet_main()->reserve_keys();
+
+        /**
+         * Format: key,address,type
+         */
+        std::ofstream ofs(filesystem::data_path() + "wallet.csv");
+        
+        /**
+         * Columns
+         */
+        ofs << "Key,Address,Type\r\n";
+        
+        if (globals::instance().wallet_main()->is_crypted() == true)
+        {
+            /**
+             * Iterate all keys.
+             */
+            for (auto & i : globals::instance().wallet_main()->crypted_keys())
+            {
+                const auto & key_id = i.first;
+                
+                key k;
+                
+                if (
+                    globals::instance().wallet_main()->get_key(
+                    key_id, k) == true
+                    )
+                {
+                    auto compressed = false;
+                    
+                    auto s = k.get_secret(compressed);
+ 
+                    if (
+                        globals::instance().wallet_main()->address_book().count(
+                        key_id) > 0
+                        )
+                    {
+                        ofs <<
+                            secret(s, k.is_compressed()).to_string() << "," <<
+                            address(key_id).to_string() << ",label" <<
+                            "\r\n"
+                        ;
+                    }
+                    else if (reserve_keys.count(key_id) > 0)
+                    {
+                        ofs <<
+                            secret(s, k.is_compressed()).to_string() << "," <<
+                            address(key_id).to_string() << ",reserve" <<
+                            "\r\n"
+                        ;
+                    }
+                    else
+                    {
+                        ofs <<
+                            secret(s, k.is_compressed()).to_string() << "," <<
+                            address(key_id).to_string() << ",change" <<
+                            "\r\n"
+                        ;
+                    }
+                }
+            }
+        }
+        else
+        {
+            /**
+             * Iterate all keys.
+             */
+            for (auto & i : globals::instance().wallet_main()->keys())
+            {
+                const auto & key_id = i.first;
+                
+                key k;
+                
+                if (
+                    globals::instance().wallet_main()->get_key(
+                    key_id, k) == true
+                    )
+                {
+                    auto compressed = false;
+                    
+                    auto s = k.get_secret(compressed);
+                    
+                    if (
+                        globals::instance().wallet_main()->address_book().count(
+                        key_id) > 0
+                        )
+                    {
+                        ofs <<
+                            secret(s, k.is_compressed()).to_string() << "," <<
+                            address(key_id).to_string() << ",label" <<
+                            "\r\n"
+                        ;
+                    }
+                    else if (reserve_keys.count(key_id) > 0)
+                    {
+                        ofs <<
+                            secret(s, k.is_compressed()).to_string() << "," <<
+                            address(key_id).to_string() << ",reserve" <<
+                            "\r\n"
+                        ;
+                    }
+                    else
+                    {
+                        ofs <<
+                            secret(s, k.is_compressed()).to_string() << "," <<
+                            address(key_id).to_string() << ",change" <<
+                            "\r\n"
+                        ;
+                    }
+                }
+            }
+        }
+        
+        ofs << std::endl;
+        
+        ofs.close();
+        
+        ret.result.put("", "null");
     }
     catch (std::exception & e)
     {
@@ -2927,6 +3146,120 @@ rpc_connection::json_rpc_response_t rpc_connection::json_getnetworkhashps(
     return ret;
 }
 
+rpc_connection::json_rpc_response_t rpc_connection::json_getnetworkinfo(
+    const json_rpc_request_t & request
+    )
+{
+    json_rpc_response_t ret;
+    
+    /**
+     * Set the id from the request.
+     */
+    ret.id = request.id;
+    
+    try
+    {
+        std::vector<std::string> routing_table;
+        
+#if (defined USE_DATABASE_STACK && USE_DATABASE_STACK)
+        auto snodes = stack_impl_.get_database_stack()->endpoints();
+        
+        ret.result.put("udp.connections", snodes.size());
+        
+        for (auto & i : snodes)
+        {
+            routing_table.push_back(
+                i.first + ":" + std::to_string(i.second)
+            );
+        }
+#else
+        ret.result.put("udp.connections", 0);
+#endif // USE_DATABASE_STACK
+        auto eps = stack_impl_.get_address_manager()->recent_good_endpoints();
+        
+        for (auto & i : eps)
+        {
+            routing_table.push_back(
+                i.addr.ipv4_mapped_address().to_string() + ":" +
+                std::to_string(i.addr.port)
+            );
+        }
+    
+        try
+        {
+            if (routing_table.size() > 0)
+            {
+                /**
+                 * Remove duplicates.
+                 */
+                std::sort(routing_table.begin(), routing_table.end());
+                routing_table.erase(
+                    std::unique(routing_table.begin(), routing_table.end()),
+                    routing_table.end()
+                );
+            
+                boost::property_tree::ptree pt_children;
+                
+                for (auto & i : routing_table)
+                {
+                    boost::property_tree::ptree pt_child;
+                    
+                    pt_child.put(
+                        "", i, rpc_json_parser::translator<std::string> ()
+                    );
+
+                    pt_children.push_back(std::make_pair("", pt_child));
+                }
+                
+                ret.result.put_child("endpoints", pt_children);
+            }
+            else
+            {
+                ret.result.put("endpoints", "null");
+            }
+        
+            ret.result.put(
+                "tcp.connections",
+                stack_impl_.get_tcp_connection_manager(
+                )->active_tcp_connections()
+            );
+            ret.result.put(
+                "tcp.ip", globals::instance().address_public().to_string(),
+                rpc_json_parser::translator<std::string> ()
+            );
+            ret.result.put(
+                "tcp.port", stack_impl_.get_configuration().network_port_tcp()
+            );
+            ret.result.put(
+                "udp.ip", globals::instance().address_public().to_string(),
+                rpc_json_parser::translator<std::string> ()
+            );
+            ret.result.put(
+                "udp.port", stack_impl_.get_configuration().network_port_tcp()
+            );
+        }
+        catch (...)
+        {
+            // ...
+        }
+    }
+    catch (std::exception & e)
+    {
+        auto pt_error = create_error_object(
+            error_code_internal_error, e.what()
+        );
+        
+        /**
+         * error_code_internal_error
+         */
+        return json_rpc_response_t{
+            boost::property_tree::ptree(), pt_error, request.id
+        };
+    }
+    
+    return ret;
+}
+
 rpc_connection::json_rpc_response_t rpc_connection::json_getnewaddress(
     const json_rpc_request_t & request
     )
@@ -2960,6 +3293,14 @@ rpc_connection::json_rpc_response_t rpc_connection::json_getnewaddress(
                     boost::property_tree::ptree(), pt_error, request.id
                 };
             }
+        }
+        
+        /**
+         * If the wallet is not locked, top up the key pool.
+         */
+        if (globals::instance().wallet_main()->is_locked() == false)
+        {
+            globals::instance().wallet_main()->top_up_key_pool();
         }
         
         /**
@@ -3031,53 +3372,61 @@ rpc_connection::json_rpc_response_t rpc_connection::json_getpeerinfo(
             stack_impl_.get_tcp_connection_manager()->tcp_connections()
         ;
         
-        for (auto & i : tcp_connections)
+        if (tcp_connections.size() > 0)
         {
-            if (auto j = i.second.lock())
+            for (auto & i : tcp_connections)
             {
-                if (auto k = j->get_tcp_transport().lock())
+                if (auto j = i.second.lock())
                 {
-                    try
+                    if (auto k = j->get_tcp_transport().lock())
                     {
-                        boost::property_tree::ptree pt_child;
-                        
-                        pt_child.put(
-                            "addr", k->socket().remote_endpoint().address(
-                            ).to_string() + ":" + std::to_string(
-                            j->protocol_version_addr_src().port),
-                            rpc_json_parser::translator<std::string> ()
-                        );
-                        pt_child.put(
-                            "services", j->protocol_version_services()
-                        );
-                        pt_child.put("lastsend", k->time_last_write());
-                        pt_child.put("lastrecv", k->time_last_read());
-                        pt_child.put(
-                            "conntime", j->protocol_version_timestamp()
-                        );
-                        pt_child.put("version", j->protocol_version());
-                        pt_child.put(
-                            "subver", j->protocol_version_user_agent(),
-                            rpc_json_parser::translator<std::string> ()
-                        );
-                        pt_child.put(
-                            "inbound",
-                            j->direction() == tcp_connection::direction_incoming
-                        );
-                        pt_child.put("releasetime", -1);
-                        pt_child.put(
-                            "startingheight", j->protocol_version_start_height()
-                        );
-                        pt_child.put("banscore", j->dos_score());
+                        try
+                        {
+                            boost::property_tree::ptree pt_child;
+                            
+                            pt_child.put(
+                                "addr", k->socket().remote_endpoint().address(
+                                ).to_string() + ":" + std::to_string(
+                                j->protocol_version_addr_src().port),
+                                rpc_json_parser::translator<std::string> ()
+                            );
+                            pt_child.put(
+                                "services", j->protocol_version_services()
+                            );
+                            pt_child.put("lastsend", k->time_last_write());
+                            pt_child.put("lastrecv", k->time_last_read());
+                            pt_child.put(
+                                "conntime", j->protocol_version_timestamp()
+                            );
+                            pt_child.put("version", j->protocol_version());
+                            pt_child.put(
+                                "subver", j->protocol_version_user_agent(),
+                                rpc_json_parser::translator<std::string> ()
+                            );
+                            pt_child.put(
+                                "inbound",
+                                j->direction() == tcp_connection::direction_incoming
+                            );
+                            pt_child.put("releasetime", -1);
+                            pt_child.put(
+                                "startingheight",
+                                j->protocol_version_start_height()
+                            );
+                            pt_child.put("banscore", j->dos_score());
 
-                        ret.result.push_back(std::make_pair("", pt_child));
-                    }
-                    catch (...)
-                    {
-                        // ...
+                            ret.result.push_back(std::make_pair("", pt_child));
+                        }
+                        catch (...)
+                        {
+                            // ...
+                        }
                     }
                 }
             }
+        }
+        else
+        {
+            ret.result.put("", "null");
         }
     }
     catch (std::exception & e)
@@ -4478,11 +4827,21 @@ rpc_connection::json_rpc_response_t rpc_connection::json_sendmany(
                 std::int64_t required_fee = 0;
                 
                 /**
+                 * Do not use ZeroTime over RPC.
+                 */
+                auto use_zerotime = false;
+                
+                /**
+                 * Do not filter any coin denominations.
+                 */
+                std::set<std::int64_t> filter;
+                
+                /**
                  * Create the transaction.
                  */
-                bool success =
+                auto success =
                     globals::instance().wallet_main()->create_transaction(
-                    to_send, wtx, k, required_fee
+                    to_send, wtx, k, required_fee, filter, 0, use_zerotime
                 );
                 
                 if (success == false)
@@ -4506,11 +4865,6 @@ rpc_connection::json_rpc_response_t rpc_connection::json_sendmany(
                         };
                     }
                 }
-                
-                /**
-                 * Do not use ZeroTime over RPC.
-                 */
-                bool use_zerotime = false;
                 
                 /**
                  * Commit the transaction.
@@ -4726,7 +5080,7 @@ rpc_connection::json_rpc_response_t rpc_connection::json_sendtoaddress(
                 /**
                  * Do not use ZeroTime over RPC.
                  */
-                bool use_zerotime = false;
+                auto use_zerotime = false;
                 
                 auto result =
                     globals::instance().wallet_main(
@@ -5037,6 +5391,146 @@ rpc_connection::json_rpc_response_t rpc_connection::json_validateaddress(
     return ret;
 }
 
+rpc_connection::json_rpc_response_t rpc_connection::json_walletdenominate(
+    const json_rpc_request_t & request
+    )
+{
+    rpc_connection::json_rpc_response_t ret;
+
+    try
+    {
+        if (request.params.size() != 1)
+        {
+            auto pt_error = create_error_object(
+                error_code_invalid_params, "invalid parameter count"
+            );
+            
+            /**
+             * error_code_invalid_params
+             */
+            return json_rpc_response_t{
+                boost::property_tree::ptree(), pt_error, request.id
+            };
+        }
+        else if (globals::instance().wallet_main()->is_locked())
+        {
+            auto pt_error = create_error_object(
+                error_code_wallet_unlock_needed, "wallet is locked"
+            );
+            
+            /**
+             * error_code_wallet_unlock_needed
+             */
+            return json_rpc_response_t{
+                boost::property_tree::ptree(), pt_error, request.id
+            };
+        }
+        else
+        {
+            /**
+             * Get the value.
+             */
+            auto value = request.params.front().second.get<double> ("");
+            
+            /**
+             * Round the amount.
+             */
+            auto amount = static_cast<std::int64_t> (
+                (value * constants::coin) > 0 ?
+                (value * constants::coin) + 0.5 :
+                (value * constants::coin) - 0.5
+            );
+            
+            if (utility::money_range(amount) == false)
+            {
+                auto pt_error = create_error_object(
+                    error_code_type_error, "invalid amount(money range)"
+                );
+                
+                /**
+                 * error_code_type_error
+                 */
+                return json_rpc_response_t{
+                    boost::property_tree::ptree(), pt_error, request.id
+                };
+            }
+            
+            if (amount > globals::instance().wallet_main()->get_balance())
+            {
+                auto pt_error = create_error_object(
+                    error_code_wallet_insufficient_funds,
+                    "insufficient funds"
+                );
+                
+                /**
+                 * error_code_wallet_insufficient_funds
+                 */
+                return json_rpc_response_t{
+                    boost::property_tree::ptree(), pt_error,
+                    request.id
+                };
+            }
+            else if (amount < (1000.0 * constants::coin))
+            {
+                auto success = globals::instance().wallet_main(
+                    )->chainblender_denominate(amount
+                );
+                
+                if (success)
+                {
+                    ret.result.put("", "null");
+                }
+                else
+                {
+                    auto pt_error = create_error_object(
+                        error_code_type_error, "failed"
+                    );
+                    
+                    /**
+                     * error_code_type_error
+                     */
+                    return json_rpc_response_t{
+                        boost::property_tree::ptree(), pt_error, request.id
+                    };
+                }
+            }
+            else
+            {
+                auto pt_error = create_error_object(
+                    error_code_type_error, "invalid amount(too much)"
+                );
+                
+                /**
+                 * error_code_type_error
+                 */
+                return json_rpc_response_t{
+                    boost::property_tree::ptree(), pt_error, request.id
+                };
+            }
+        }
+    }
+    catch (std::exception & e)
+    {
+        log_error(
+            "RPC Connection failed to create json_walletdenominate, what = " <<
+            e.what() << "."
+        );
+        
+        auto pt_error = create_error_object(
+            error_code_internal_error, e.what()
+        );
+        
+        /**
+         * error_code_internal_error
+         */
+        return json_rpc_response_t{
+            boost::property_tree::ptree(), pt_error, request.id
+        };
+    }
+    
+    return ret;
+}
+
 
 rpc_connection::json_rpc_response_t rpc_connection::json_walletpassphrase(
     const json_rpc_request_t & request
@@ -5086,6 +5580,11 @@ rpc_connection::json_rpc_response_t rpc_connection::json_walletpassphrase(
                     passphrase) == true
                     )
                 {
+                    /**
+                     * Top up the key pool.
+                     */
+                    globals::instance().wallet_main()->top_up_key_pool();
+        
                     ret.result.put("", "null");
                 }
                 else
@@ -5132,14 +5631,14 @@ rpc_connection::json_rpc_response_t rpc_connection::json_walletpassphrase(
         }
     }
     
-	return ret;
+    return ret;
 }
 
 rpc_connection::json_rpc_response_t rpc_connection::json_walletlock(
     const json_rpc_request_t & request
     )
 {
-	json_rpc_response_t ret;
+    json_rpc_response_t ret;
     
     if (globals::instance().wallet_main()->is_crypted() == false)
     {
@@ -5199,7 +5698,7 @@ rpc_connection::json_rpc_response_t
     const json_rpc_request_t & request
     )
 {
-	json_rpc_response_t ret;
+    json_rpc_response_t ret;
     
     if (request.params.size() != 2)
     {
@@ -5265,42 +5764,6 @@ rpc_connection::json_rpc_response_t
         }
         
         ret.result.put("", "null");
-    }
-    
-    return ret;
-}
-
-boost::property_tree::ptree rpc_connection::json_walletstatus()
-{
-    boost::property_tree::ptree ret;
-
-    try
-    {
-        ret.put(
-            "encrypted",
-            globals::instance().wallet_main()->is_crypted()
-        );
-        ret.put(
-            "locked",
-            globals::instance().wallet_main()->is_locked()
-        );
-        
-        /**
-         * The std::stringstream.
-         */
-        std::stringstream ss;
-        
-        /**
-         * Write property tree to json file.
-         */
-        rpc_json_parser::write_json(ss, ret, false);
-    }
-    catch (std::exception & e)
-    {
-        log_error(
-            "RPC Connection failed to create json_walletstatus, what = " <<
-            e.what() << "."
-        );
     }
     
     return ret;
