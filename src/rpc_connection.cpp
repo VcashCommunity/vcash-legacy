@@ -3761,11 +3761,6 @@ rpc_connection::json_rpc_response_t rpc_connection::json_gettransaction(
                 
                 if (utility::get_transaction(hash_txid, tx, hash_block))
                 {
-                    ret.result.put(
-                        "txid", hash_txid.to_string(),
-                        rpc_json_parser::translator<std::string> ()
-                    );
-                    
                     auto transactions = transaction_to_ptree(tx, 0);
                     
                     for (auto & i : transactions)
