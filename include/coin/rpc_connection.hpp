@@ -437,6 +437,11 @@ namespace coin {
                 const json_rpc_request_t & request
             );
         
+            /**
+             * Encodes getconnectioncount data into JSON format.
+             */
+            boost::property_tree::ptree json_getconnectioncount();
+        
            /**
              * Encodes getincentiveinfo data into JSON format.
              */
@@ -622,6 +627,11 @@ namespace coin {
             json_rpc_response_t json_walletpassphrasechange(
                 const json_rpc_request_t & request
             );
+        
+            /**
+             * Encodes walletstatus data into JSON format.
+             */
+            boost::property_tree::ptree json_walletstatus();
         
             /**
              * Encodes a transaction_wallet into a boost::property_tree::ptree.
