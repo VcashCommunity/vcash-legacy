@@ -841,12 +841,12 @@ std::shared_ptr<block> block::create_new(
             index_previous->height() + 1) > 0
             )
         {
-            std::int64_t value = reward::get_proof_of_work(
+            auto value = reward::get_proof_of_work(
                 index_previous->height() + 1, fees,
                 index_previous->get_block_hash()
             );
             
-            std::int64_t value_incentive =
+            auto value_incentive =
                 value * (incentive::instance().get_percentage(
                 index_previous->height() + 1) / 100.0f)
             ;
