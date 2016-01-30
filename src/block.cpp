@@ -36,11 +36,6 @@
 #include <coin/filesystem.hpp>
 #include <coin/globals.hpp>
 #include <coin/hash.hpp>
-#if (defined USE_WHIRLPOOL && USE_WHIRLPOOL)
-    // ...
-#else
-#include <coin/hash_scrypt.hpp>
-#endif // USE_WHIRLPOOL
 #include <coin/incentive.hpp>
 #include <coin/kernel.hpp>
 #include <coin/key_reserved.hpp>
@@ -222,21 +217,28 @@ sha256 block::get_hash() const
     buffer.write_uint32(m_header.nonce);
 
     assert(buffer.size() == header_length);
-#if (defined USE_WHIRLPOOL && USE_WHIRLPOOL)
-    auto digest = hash::whirlpoolx(
-        reinterpret_cast<std::uint8_t *>(buffer.data()), buffer.size()
-    );
+
+    /**
+     * Use whirlpool for blocks less than version 5.
+     */
+    auto use_whirlpool = m_header.version < 5;
     
-    std::memcpy(ptr, &digest[0], digest.size());
-#else
-    auto buf = scrypt_buffer_alloc();
-    
-    hash_scrypt(
-        (const void *)buffer.data(), buffer.size(), ptr, buf
-    );
-    
-    free(buf);
-#endif // USE_WHIRLPOOL
+    if (use_whirlpool == true)
+    {
+        auto digest = hash::whirlpoolx(
+            reinterpret_cast<std::uint8_t *>(buffer.data()), buffer.size()
+        );
+        
+        std::memcpy(ptr, &digest[0], digest.size());
+    }
+    else
+    {
+        auto digest = hash::blake2568round(
+            reinterpret_cast<std::uint8_t *>(buffer.data()), buffer.size()
+        );
+        
+        std::memcpy(ptr, &digest[0], digest.size());
+    }
 
     return ret;
 }
@@ -2253,7 +2255,23 @@ bool block::accept_block(
     
         return false;
     }
-   
+    
+    /**
+     * Reject block header version < 5 after block 310000.
+     */
+    if (
+        m_header.version < 5 &&
+        ((constants::test_net == false && height > 310000) ||
+        (constants::test_net == true && height > 18))
+        )
+    {
+        log_error(
+            "Block, accept block failed, rejected block header version < 5."
+        );
+    
+        return false;
+    }
+
     /**
      * Enforce rule that the coinbase starts with serialized block height.
      */
@@ -2717,11 +2735,11 @@ bool block::set_best_chain(
      */
     if (utility::is_initial_block_download() == false)
     {
-        int blocks_upgraded = 0;
+        auto blocks_upgraded = 0;
         
         auto index = stack_impl::get_block_index_best();
         
-        for (int i = 0; i < 100 && index != 0; i++)
+        for (auto i = 0; i < 100 && index != 0; i++)
         {
             if (index->version() > block::current_version)
             {
