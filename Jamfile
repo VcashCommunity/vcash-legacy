@@ -43,6 +43,7 @@ SOURCES =
 	alert_unsigned
 	base58
 	big_number
+    blake256
 	block
 	block_index
 	block_index_disk
@@ -58,6 +59,7 @@ SOURCES =
 	db_env
 	db_tx
 	db_wallet
+    ecdhe
 	file
 	filesystem
     gateway
