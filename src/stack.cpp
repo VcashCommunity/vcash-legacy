@@ -57,9 +57,13 @@ void stack::start(const std::map<std::string, std::string> & args)
          */
         if (constants::test_net == true)
         {
-            /**
-             * Add any test network nodes here.
-             */
+            stack_impl_->get_configuration().bootstrap_nodes().push_back(
+                std::make_pair("178.62.198.121", 42354)
+            );
+
+            stack_impl_->get_configuration().bootstrap_nodes().push_back(
+                std::make_pair("62.210.105.218", 35972)
+            );
         }
         else
         {

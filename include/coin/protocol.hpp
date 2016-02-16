@@ -70,7 +70,7 @@ namespace protocol {
         /**
          * The default rpc port.
          */
-        enum { default_rpc_port = 9195 };
+        enum { default_rpc_port = 8195 };
     
         /**
          * The operation modes.

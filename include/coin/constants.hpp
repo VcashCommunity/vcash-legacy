@@ -65,7 +65,7 @@ namespace constants {
     /**
      * If true the code will operate on the test network configuration.
      */
-    static const bool test_net = false;
+    static const bool test_net = true;
 
     /**
      * The version string.
