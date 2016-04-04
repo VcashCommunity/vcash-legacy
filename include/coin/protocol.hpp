@@ -55,7 +55,7 @@ namespace protocol {
         /**
          * The version.
          */
-        enum { version = 60047 };
+        enum { version = 60048 };
 
         /**
          * The minimum version.
@@ -635,13 +635,25 @@ namespace protocol {
             "ERROR",
             "tx",
             "block",
+#if 0 /* BIP-0037 */
+            "filtered block",
+#endif
             "ztlock",
             "ztvote",
             "ivote",
+            "unkown",
+            "unkown",
+            "unkown",
+            "unkown",
+            "unkown",
+            "unkown",
+            "unkown",
+            "unkown",
+            "unkown",
         };
     
         /** Message Structures */
-    
+        
         /**
          * The version structure.
          */
@@ -655,6 +667,7 @@ namespace protocol {
             std::uint64_t nonce;
             std::string user_agent;
             std::uint32_t start_height;
+            std::uint8_t relay;
         } version_t;
     
         /**

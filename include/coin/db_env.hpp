@@ -28,6 +28,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <coin/filesystem.hpp>
@@ -42,6 +43,11 @@ namespace coin {
         public:
         
             /**
+             * The default cache size.
+             */
+            enum { default_cache_size = 128 };
+        
+            /**
              * Constructor
              */
             db_env();
@@ -53,10 +59,10 @@ namespace coin {
         
             /**
              * Opens the database environment.
-             * @param data_path The data path.
+             * @param cache_size The cache size.
              */
             bool open(
-                const std::string & data_path = filesystem::data_path()
+                const std::uint32_t & cache_size = default_cache_size
             );
         
             /**
@@ -173,6 +179,11 @@ namespace coin {
              * m_Dbs std::recursive_mutex.
              */
             std::recursive_mutex mutex_m_Dbs_;
+        
+            /**
+             * The memp_trickle thread.
+             */
+            static std::thread thread_memp_trickle_;
     };
     
 } // namespace coin
