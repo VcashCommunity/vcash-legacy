@@ -45,7 +45,7 @@ namespace coin {
             /**
              * The default cache size.
              */
-            enum { default_cache_size = 128 };
+            enum { default_cache_size = 100 };
         
             /**
              * Constructor
@@ -179,11 +179,6 @@ namespace coin {
              * m_Dbs std::recursive_mutex.
              */
             std::recursive_mutex mutex_m_Dbs_;
-        
-            /**
-             * The memp_trickle thread.
-             */
-            static std::thread thread_memp_trickle_;
     };
     
 } // namespace coin
