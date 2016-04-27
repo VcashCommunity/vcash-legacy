@@ -21,20 +21,85 @@
 #ifndef COIN_BLOCK_MERKLE_HPP
 #define COIN_BLOCK_MERKLE_HPP
 
+#include <cstdint>
+#include <vector>
+
+#include <coin/block.hpp>
+#include <coin/transaction_bloom_filter.hpp>
+#include <coin/data_buffer.hpp>
+#include <coin/merkle_tree_partial.hpp>
+#include <coin/sha256.hpp>
+
 namespace coin {
 
     /**
-     * Implements a BIP-0037 (filtered block) Merkle Block.
+     * Implements a BIP-0037 Merkle Block (filtered block).
      */
     class block_merkle
     {
         public:
         
-            // ...
+            /**
+             * Constructor
+             */
+            block_merkle();
             
+            /**
+             * Constructor
+             * @param blk The block.
+             * @param filter The transaction_bloom_filter.
+             */
+            block_merkle(
+                const block & blk, transaction_bloom_filter & filter
+            );
+
+            /**
+             * Encodes
+             * @param buffer The data_buffer.
+             */
+            void encode(data_buffer & buffer);
+        
+            /**
+             * Decodes
+             * @param buffer The data_buffer.
+             */
+            bool decode(data_buffer & buffer);
+        
+            /**
+             * The matched transactions.
+             */
+            const std::vector<
+                std::pair<std::uint32_t, sha256> > &
+                transactions_matched() const
+            ;
+        
         private:
         
-            // ...
+            /**
+             * Intitializes the merkle block.
+             * @param blk The block.
+             * @param filter The transaction_bloom_filter.
+             */
+            void initialize(
+                const block & blk, transaction_bloom_filter & filter
+            );
+        
+            /**
+             * The matched transactions.
+             */
+            std::vector<
+                std::pair<std::uint32_t, sha256> > m_transactions_matched
+            ;
+        
+            /**
+             * The block header.
+             */
+            block::header_t m_block_header;
+        
+            /**
+             * The partial merkle tree.
+             */
+            merkle_tree_partial m_merkle_tree_partial;
         
         protected:
         

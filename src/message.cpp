@@ -24,6 +24,7 @@
 
 #include <coin/alert.hpp>
 #include <coin/block.hpp>
+#include <coin/block_merkle.hpp>
 #include <coin/block_locator.hpp>
 #include <coin/checkpoint_sync.hpp>
 #include <coin/chainblender_broadcast.hpp>
@@ -42,6 +43,7 @@
 #include <coin/message.hpp>
 #include <coin/stack_impl.hpp>
 #include <coin/time.hpp>
+#include <coin/transaction_bloom_filter.hpp>
 #include <coin/zerotime_answer.hpp>
 #include <coin/zerotime_lock.hpp>
 #include <coin/zerotime_question.hpp>
@@ -172,6 +174,31 @@ void message::encode()
              * Create the alert.
              */
             m_payload = create_alert();
+        }
+        else if (m_header.command == "filterload")
+        {
+            /**
+             * We are not a BIP-0037 (lite client).
+             */
+        }
+        else if (m_header.command == "filteradd")
+        {
+            /**
+             * We are not a BIP-0037 (lite client).
+             */
+        }
+        else if (m_header.command == "filterclear")
+        {
+            /**
+             * We are not a BIP-0037 (lite client).
+             */
+        }
+        else if (m_header.command == "merkleblock")
+        {
+            /**
+             * Create the merkleblock.
+             */
+            m_payload = create_merkleblock();
         }
         else if (m_header.command == "ztlock")
         {
@@ -714,6 +741,77 @@ void message::decode()
                 m_protocol_alert.a.reset();
             }
         }
+        else if (m_header.command == "filterload")
+        {
+            /**
+             * Allocate the filterload.
+             */
+            m_protocol_filterload.filterload =
+                std::make_shared<transaction_bloom_filter> ()
+            ;
+            
+            /**
+             * Decode the filterload.
+             */
+            if (m_protocol_filterload.filterload->decode(*this))
+            {
+                // ...
+            }
+            else
+            {
+                log_error("Message failed to decode filterload.");
+                
+                /**
+                 * Deallocate the filterload.
+                 */
+                m_protocol_filterload.filterload.reset();
+            }
+        }
+        else if (m_header.command == "filteradd")
+        {
+            auto len = read_var_int();
+            
+            if (len > 0)
+            {
+                m_protocol_filteradd.filteradd.resize(len);
+                
+                read_bytes(
+                    reinterpret_cast<char *> (
+                    &m_protocol_filteradd.filteradd[0]),
+                    m_protocol_filteradd.filteradd.size()
+                );
+            }
+        }
+        else if (m_header.command == "filterclear")
+        {
+            // ...
+        }
+        else if (m_header.command == "merkleblock")
+        {
+            /**
+             * Allocate the merkleblock.
+             */
+            m_protocol_merkleblock.merkleblock =
+                std::make_shared<block_merkle> ()
+            ;
+            
+            /**
+             * Decode the merkleblock.
+             */
+            if (m_protocol_merkleblock.merkleblock->decode(*this))
+            {
+                // ...
+            }
+            else
+            {
+                log_error("Message failed to decode merkleblock.");
+                
+                /**
+                 * Deallocate the merkleblock.
+                 */
+                m_protocol_merkleblock.merkleblock.reset();
+            }
+        }
         else if (m_header.command == "ztlock")
         {
             /**
@@ -1132,6 +1230,21 @@ protocol::alert_t & message::protocol_alert()
     return m_protocol_alert;
 }
 
+protocol::filterload_t & message::protocol_filterload()
+{
+    return m_protocol_filterload;
+}
+
+protocol::filteradd_t & message::protocol_filteradd()
+{
+    return m_protocol_filteradd;
+}
+
+protocol::merkleblock_t & message::protocol_merkleblock()
+{
+    return m_protocol_merkleblock;
+}
+
 protocol::ztlock_t & message::protocol_ztlock()
 {
     return m_protocol_ztlock;
@@ -1384,7 +1497,7 @@ data_buffer message::create_version()
     );
     
     /**
-     * bip-0037
+     * BIP-0037
      */
     if (protocol::version > 60047)
     {
@@ -1608,6 +1721,18 @@ data_buffer message::create_block()
     if (m_protocol_block.blk)
     {
         m_protocol_block.blk->encode(ret);
+    }
+    
+    return ret;
+}
+
+data_buffer message::create_merkleblock()
+{
+    data_buffer ret;
+    
+    if (m_protocol_merkleblock.merkleblock)
+    {
+        m_protocol_merkleblock.merkleblock->encode(ret);
     }
     
     return ret;

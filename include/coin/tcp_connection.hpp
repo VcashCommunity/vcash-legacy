@@ -23,6 +23,7 @@
 
 #include <deque>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <set>
 #include <string>
@@ -34,12 +35,14 @@
 #include <coin/inventory_vector.hpp>
 #include <coin/protocol.hpp>
 #include <coin/sha256.hpp>
+#include <coin/transaction_bloom_filter.hpp>
 
 namespace coin {
     
     class alert;
     class block;
     class block_index;
+    class block_merkle;
     class checkpoint_sync;
     class incentive_answer;
     class message;
@@ -398,6 +401,12 @@ namespace coin {
              * @param headers The block headers.
              */
             void send_headers_message(const std::vector<block> & headers);
+        
+            /**
+             * Sends a merkleblock message.
+             * @param merkleblock The block_merkle.
+             */
+            void send_merkleblock_message(const block_merkle & merkleblock);
         
             /**
              * Sends a ztlock message.
@@ -766,6 +775,13 @@ namespace coin {
              * chainblender_status::code_ready.
              */
             bool did_send_cbstatus_cbready_code_;
+        
+            /**
+             * The BIP-0037 transaction bloom filter.
+             */
+            std::unique_ptr<transaction_bloom_filter>
+                transaction_bloom_filter_
+            ;
     };
     
 } // namespace coin
