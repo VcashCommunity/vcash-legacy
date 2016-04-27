@@ -36,6 +36,7 @@ namespace coin {
 
 class alert;
 class block;
+class block_merkle;
 class block_locator;
 class chainblender_broadcast;
 class chainblender_join;
@@ -45,6 +46,7 @@ class incentive_answer;
 class incentive_question;
 class incentive_vote;
 class transaction;
+class transaction_bloom_filter;
 class zerotime_answer;
 class zerotime_lock;
 class zerotime_question;
@@ -641,7 +643,9 @@ namespace protocol {
             "ztlock",
             "ztvote",
             "ivote",
-            "unkown",
+#if 1 /* BIP-0037 */
+            "filtered block nonstandard",
+#endif
             "unkown",
             "unkown",
             "unkown",
@@ -775,6 +779,30 @@ namespace protocol {
         {
             std::shared_ptr<alert> a;
         } alert_t;
+    
+        /**
+         * The filterload structure.
+         */
+        typedef struct
+        {
+            std::shared_ptr<transaction_bloom_filter> filterload;
+        } filterload_t;
+    
+        /**
+         * The filteradd structure.
+         */
+        typedef struct
+        {
+            std::vector<std::uint8_t> filteradd;
+        } filteradd_t;
+    
+        /**
+         * The merkleblock structure.
+         */
+        typedef struct
+        {
+            std::shared_ptr<block_merkle> merkleblock;
+        } merkleblock_t;
     
         /**
          * The ztlock structure.
