@@ -1362,15 +1362,6 @@ void tcp_connection::send_getdata_message()
                  * Allocate the message.
                  */
                 message msg("getdata");
-
-                /**
-                 * Remove any duplicates.
-                 */
-                std::sort(getdata_.begin(), getdata_.end());
-                getdata_.erase(
-                    std::unique(getdata_.begin(), getdata_.end()),
-                    getdata_.end()
-                );
                 
                 /**
                  * Set the getdata.
@@ -3022,7 +3013,11 @@ bool tcp_connection::handle_message(message & msg)
     }
     else if (msg.header().command == "getblocks")
     {
-        if (std::time(0) - time_last_getblocks_received_ < 3)
+        if (
+            (m_protocol_version_services &
+            protocol::operation_mode_peer) == 1 &&
+            std::time(0) - time_last_getblocks_received_ < 3
+            )
         {
             log_debug(
                 "TCP connection remote peer is sending getblocks too fast (" <<
