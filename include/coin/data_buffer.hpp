@@ -84,7 +84,7 @@ namespace coin {
                 
 			    write_bytes(other.data(), other.size());
                 
-                m_read_ptr = &m_data[0];
+                m_read_ptr = m_data.size() > 0 ? &m_data[0] : 0;
 			}
         
             /**
@@ -114,7 +114,7 @@ namespace coin {
 			    {
 			        write_bytes(buf, len);
                     
-                    m_read_ptr = &m_data[0];
+                    m_read_ptr = m_data.size() > 0 ? &m_data[0] : 0;
 			    }
 			}
 
@@ -244,7 +244,7 @@ namespace coin {
 
 			void rewind()
 			{
-				m_read_ptr = &m_data[0];
+				m_read_ptr = m_data.size() > 0 ? &m_data[0] : 0;
 			}
 
 			void seek(const std::size_t & offset)
@@ -645,7 +645,7 @@ namespace coin {
                 
 			    write_bytes(other.data(), other.size());
                 
-                m_read_ptr = &m_data[0];
+                m_read_ptr = m_data.size() > 0 ? &m_data[0] : 0;
                 
                 file_offset_ = other.file_offset_;
                 file_ = other.file_;
