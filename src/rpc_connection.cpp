@@ -2298,8 +2298,18 @@ rpc_connection::json_rpc_response_t rpc_connection::json_getblock(
                 
                 tx.set_merkle_branch(&blk);
                 
+                /**
+                 * Allocate a data_buffer for encoding the block.
+                 */
+                data_buffer buffer_block;
+                
+                /**
+                 * Encode the block to obtain the serialized size.
+                 */
+                blk.encode(buffer_block);
+                
                 ret.result.put("confirmations", tx.get_depth_in_main_chain());
-                ret.result.put("size", blk.size());
+                ret.result.put("size", buffer_block.size());
                 ret.result.put("height", index->height());
                 ret.result.put("version", blk.header().version);
                 ret.result.put(
@@ -2921,12 +2931,12 @@ rpc_connection::json_rpc_response_t rpc_connection::json_getblocktemplate(
         /**
          * Put sigoplimit into property tree.
          */
-        ret.result.put("sigoplimit", constants::max_block_sig_ops);
+        ret.result.put("sigoplimit", block::get_maximum_size_median220() / 50);
         
         /**
          * Put sizelimit into property tree.
          */
-        ret.result.put("sizelimit", constants::max_block_size);
+        ret.result.put("sizelimit", block::get_maximum_size_median220());
         
         /**
          * Put curtime into property tree.
