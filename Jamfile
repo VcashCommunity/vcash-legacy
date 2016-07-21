@@ -64,6 +64,8 @@ SOURCES =
 	db
 	db_env
 	db_tx
+    db_tx_bdb
+	db_tx_ldb
 	db_wallet
     ecdhe
 	file
@@ -104,6 +106,8 @@ SOURCES =
     rpc_server
     rpc_transport
 	script
+    script_checker
+    script_checker_queue
 	secret
 	sha256
 	signature_cache
@@ -155,6 +159,11 @@ local usage-requirements =
 	<toolset>clang-darwin:<include>./deps/platforms/osx/db/include
 	<toolset>darwin:<include>./deps/platforms/osx/db/include
 	<toolset>msvc:<include>./deps/platforms/windows/db/build_windows
+
+	<toolset>gcc:<include>./deps/leveldb/leveldb/include
+	<toolset>clang-darwin:<include>./deps/leveldb/leveldb/include
+	<toolset>darwin:<include>./deps/leveldb/leveldb/include
+	<toolset>msvc:<include>./deps/leveldb/leveldb/include
 
 	<toolset>msvc,<variant>debug:<include>$(BOOST_ROOT)/build/debug/include
 	<toolset>msvc,<variant>release:<include>$(BOOST_ROOT)/build/release/include

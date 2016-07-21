@@ -58,6 +58,8 @@ LOCAL_SRC_FILES := \
     ../src/database_stack.cpp \
 	../src/db_env.cpp \
 	../src/db_tx.cpp \
+	../src/db_tx_bdb.cpp \
+	../src/db_tx_ldb.cpp \
 	../src/db_wallet.cpp \
 	../src/db.cpp \
 	../src/ecdhe.cpp \
@@ -100,6 +102,8 @@ LOCAL_SRC_FILES := \
 	../src/rpc_server.cpp \
 	../src/rpc_transport.cpp \
 	../src/script.cpp \
+	../src/script_checker.cpp \
+	../src/script_checker_queue.cpp \
 	../src/secret.cpp \
 	../src/sha256.cpp \
 	../src/signature_cache.cpp \
