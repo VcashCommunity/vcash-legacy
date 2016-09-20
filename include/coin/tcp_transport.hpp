@@ -1,9 +1,9 @@
 /*
  * Copyright (c) 2013-2016 John Connor (BM-NC49AxAjcqVcF5jNPu85Rb8MJ2d9JqZt)
  *
- * This file is part of vanillacoin.
+ * This file is part of vcash.
  *
- * vanillacoin is free software: you can redistribute it and/or modify
+ * vcash is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License with
  * additional permissions to the one published by the Free Software
  * Foundation, either version 3 of the License, or (at your option)
@@ -55,16 +55,20 @@ namespace coin {
                 state_connecting,
                 state_connected,
             } state_t;
-        
+
             /**
              * Constructor
              * @param ios The boost::asio::io_service.
              * @param s The boost::asio::strand.
+             * @pram use_static_ssl_context If true the connection is most
+             * likely incoming and will use a staticially allocated 
+             * boost::asio::ssl::context.
              */
             tcp_transport(
-                boost::asio::io_service & ios, boost::asio::strand & s
+                boost::asio::io_service & ios, boost::asio::strand & s,
+                const bool & use_static_ssl_context = true
             );
-
+        
             /**
              * Destructor
              */

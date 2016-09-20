@@ -1,9 +1,9 @@
 /*
  * Copyright (c) 2013-2016 John Connor (BM-NC49AxAjcqVcF5jNPu85Rb8MJ2d9JqZt)
  *
- * This file is part of vanillacoin.
+ * This file is part of vcash.
  *
- * vanillacoin is free software: you can redistribute it and/or modify
+ * vcash is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License with
  * additional permissions to the one published by the Free Software
  * Foundation, either version 3 of the License, or (at your option)
@@ -37,7 +37,9 @@
 #include <coin/globals.hpp>
 #include <coin/incentive.hpp>
 #include <coin/incentive_answer.hpp>
+#include <coin/incentive_collaterals.hpp>
 #include <coin/incentive_manager.hpp>
+#include <coin/incentive_sync.hpp>
 #include <coin/incentive_question.hpp>
 #include <coin/incentive_vote.hpp>
 #include <coin/logger.hpp>
@@ -66,6 +68,7 @@ tcp_connection::tcp_connection(
     const direction_t & direction, std::shared_ptr<tcp_transport> transport
     )
     : m_tcp_transport(transport)
+    , m_identifier(random::uint32())
     , m_direction(direction)
     , m_protocol_version(0)
     , m_protocol_version_services(0)
@@ -74,22 +77,30 @@ tcp_connection::tcp_connection(
     , m_protocol_version_relay(true)
     , m_sent_getaddr(false)
     , m_dos_score(0)
+    , m_spv_dos_score(0.0)
     , m_probe_only(false)
     , m_state(state_none)
     , io_service_(ios)
     , strand_(globals::instance().strand())
     , stack_impl_(owner)
-    , timer_ping_(ios)
-    , timer_ping_timeout_(ios)
+    , timer_ping_(io_service_)
+    , timer_ping_timeout_(io_service_)
     , did_send_getblocks_(false)
+    , last_getblocks_index_begin_(0)
     , time_last_block_received_(std::time(0))
-    , timer_delayed_stop_(ios)
-    , timer_getblocks_(ios)
-    , timer_addr_rebroadcast_(ios)
-    , time_last_getblocks_received_(0)
-    , time_last_getblocks_sent_(0)
-    , timer_cbstatus_(ios)
+    , timer_delayed_stop_(io_service_)
+    , timer_version_timeout_(io_service_)
+    , timer_getblocks_(io_service_)
+    , timer_getheaders_(io_service_)
+    , timer_addr_rebroadcast_(io_service_)
+    , time_last_getblocks_sent_(std::time(0) - 60)
+    , time_last_headers_received_(0)
+    , timer_cbstatus_(io_service_)
     , did_send_cbstatus_cbready_code_(false)
+    , timer_spv_getheader_timeout_(io_service_)
+    , timer_spv_getblocks_timeout_(io_service_)
+    , timer_isync_(io_service_)
+    , did_send_isync_(false)
 {
     // ...
 }
@@ -101,210 +112,53 @@ tcp_connection::~tcp_connection()
 
 void tcp_connection::start()
 {
-    m_state = state_starting;
-    
-    if (m_direction == direction_incoming)
+    /**
+     * Hold onto the tcp_transport until the post operation completes.
+     */
+    if (auto transport = m_tcp_transport.lock())
     {
-        if (auto transport = m_tcp_transport.lock())
+        auto self(shared_from_this());
+        
+        /**
+         * Post the operation onto the boost::asio::io_service.
+         */
+        io_service_.post(strand_.wrap([this, self, transport]()
         {
-            auto self(shared_from_this());
-            
-            /**
-             * Set the transport on read handler.
-             */
-            transport->set_on_read(
-                [this, self](std::shared_ptr<tcp_transport> t,
-                const char * buf, const std::size_t & len)
-            {
-                on_read(buf, len);
-            });
-
-            /**
-             * Start the transport accepting the connection.
-             */
-            transport->start();
-            
-            /**
-             * Start the ping timer.
-             */
-            timer_ping_.expires_from_now(
-                std::chrono::seconds(interval_ping / 4)
-            );
-            timer_ping_.async_wait(globals::instance().strand().wrap(
-                std::bind(&tcp_connection::do_ping, self,
-                std::placeholders::_1))
-            );
-            
-            /**
-             * Start the getblocks timer.
-             */
-            timer_getblocks_.expires_from_now(std::chrono::seconds(8));
-            timer_getblocks_.async_wait(globals::instance().strand().wrap(
-                std::bind(&tcp_connection::do_send_getblocks, self,
-                std::placeholders::_1))
-            );
-            
-            /**
-             * Start the addr rebroadcast timer.
-             */
-            do_rebroadcast_addr_messages(900);
-        }
+            do_start();
+        }));
     }
-    else if (m_direction == direction_outgoing)
-    {
-        assert(0);
-    }
-    
-    m_state = state_started;
 }
 
-void tcp_connection::start(const boost::asio::ip::tcp::endpoint & ep)
+void tcp_connection::start(const boost::asio::ip::tcp::endpoint ep)
 {
-    m_state = state_starting;
-
-    if (m_direction == direction_incoming)
+    /**
+     * Hold onto the tcp_transport until the post operation completes.
+     */
+    if (auto transport = m_tcp_transport.lock())
     {
-        assert(0);
-    }
-    else if (m_direction == direction_outgoing)
-    {
-        if (auto transport = m_tcp_transport.lock())
+        auto self(shared_from_this());
+        
+        /**
+         * Post the operation onto the boost::asio::io_service.
+         */
+        io_service_.post(strand_.wrap([this, self, ep, transport]()
         {
-            auto self(shared_from_this());
-            
-            /**
-             * Set the transport on read handler.
-             */
-            transport->set_on_read(
-                [this, self](std::shared_ptr<tcp_transport> t,
-                const char * buf, const std::size_t & len)
-            {
-                on_read(buf, len);
-            });
-
-            /**
-             * Start the transport connecting to the endpoint.
-             */
-            transport->start(
-                ep.address().to_string(), ep.port(), [self, ep](
-                boost::system::error_code ec,
-                std::shared_ptr<tcp_transport> transport)
-                {
-                    if (ec)
-                    {
-                        log_none(
-                            "TCP connection to " << ep << " failed, "
-                            "message = " << ec.message() << "."
-                        );
-                        
-                        self->stop();
-                    }
-                    else
-                    {
-                        log_debug(
-                            "TCP connection to " << ep << " success, sending "
-                            "version message."
-                        );
-                        
-                        /**
-                         * Send a version message.
-                         */
-                        self->send_version_message();
-                    }
-                }
-            );
-            
-            /**
-             * Start the ping timer.
-             */
-            timer_ping_.expires_from_now(std::chrono::seconds(interval_ping));
-            timer_ping_.async_wait(globals::instance().strand().wrap(
-                std::bind(&tcp_connection::do_ping, self,
-                std::placeholders::_1))
-            );
-            
-            /**
-             * Start the getblocks timer.
-             */
-            timer_getblocks_.expires_from_now(std::chrono::seconds(8));
-            timer_getblocks_.async_wait(globals::instance().strand().wrap(
-                std::bind(&tcp_connection::do_send_getblocks, self,
-                std::placeholders::_1))
-            );
-            
-            /**
-             * Start the addr rebroadcast timer.
-             */
-            do_rebroadcast_addr_messages(300);
-        }
-        else
-        {
-            assert(0);
-        }
+            do_start(ep);
+        }));
     }
-    
-    m_state = state_started;
 }
 
 void tcp_connection::stop()
 {
-    m_state = state_stopping;
+    auto self(shared_from_this());
     
     /**
-     * If we are a part of a chainblender session we need to reduce the
-     * participants count.
+     * Post the operation onto the boost::asio::io_service.
      */
-    if (m_hash_chainblender_session_id.is_empty() == false)
+    io_service_.post(strand_.wrap([this, self]()
     {
-        /**
-         * Get the sessions.
-         */
-        auto & sessions = chainblender::instance().sessions();
-        
-        if (
-            sessions.count(m_hash_chainblender_session_id) > 0
-            )
-        {
-            if (
-                sessions[m_hash_chainblender_session_id].participants > 0
-                )
-            {
-                sessions[
-                    m_hash_chainblender_session_id
-                ].participants -= 1;
-            }
-            else
-            {
-                sessions.erase(m_hash_chainblender_session_id);
-            }
-        }
-    }
-    
-    /**
-     * Stop the transport.
-     */
-    if (auto t = m_tcp_transport.lock())
-    {
-        t->stop();
-    }
-    
-    /**
-     * Remove references to shared pointers.
-     */
-    m_oneshot_ztquestion = nullptr,
-        m_on_probe = nullptr, m_on_ianswer = nullptr, m_on_cbstatus = nullptr,
-        m_on_cbbroadcast = nullptr, m_chainblender_join = nullptr;
-    ;
-    
-    read_queue_.clear();
-    timer_ping_.cancel();
-    timer_ping_timeout_.cancel();
-    timer_getblocks_.cancel();
-    timer_addr_rebroadcast_.cancel();
-    timer_cbstatus_.cancel();
-    timer_delayed_stop_.cancel();
-    
-    m_state = state_stopped;
+        do_stop();
+    }));
 }
 
 void tcp_connection::stop_after(const std::uint32_t & interval)
@@ -331,7 +185,7 @@ void tcp_connection::stop_after(const std::uint32_t & interval)
             /**
              * Stop
              */
-            stop();
+            do_stop();
         }
     }));
 }
@@ -354,6 +208,8 @@ void tcp_connection::send_addr_message(const bool & local_address_only)
     
     if (auto t = m_tcp_transport.lock())
     {
+        std::lock_guard<std::recursive_mutex> l1(stack_impl::mutex());
+        
         /**
          * Allocate the message.
          */
@@ -361,10 +217,6 @@ void tcp_connection::send_addr_message(const bool & local_address_only)
 
         if (local_address_only == false)
         {
-            std::lock_guard<std::recursive_mutex> l1(
-                mutex_seen_network_addresses_
-            );
-            
             auto addr_list = stack_impl_.get_address_manager()->get_addr();
             
             for (auto & i : addr_list)
@@ -376,17 +228,22 @@ void tcp_connection::send_addr_message(const bool & local_address_only)
             }
         }
         
-        /**
-         * Get our network port.
-         */
-        auto port = stack_impl_.get_tcp_acceptor()->local_endpoint().port();
-        
-        protocol::network_address_t addr =
-            protocol::network_address_t::from_endpoint(
-            boost::asio::ip::tcp::endpoint(m_address_public, port)
-        );
-        
-        msg.protocol_addr().addr_list.push_back(addr);
+        if (globals::instance().is_client_spv() == false)
+        {
+            /**
+             * Get our network port.
+             */
+            auto port =
+                stack_impl_.get_tcp_acceptor()->local_endpoint().port()
+            ;
+            
+            protocol::network_address_t addr =
+                protocol::network_address_t::from_endpoint(
+                boost::asio::ip::tcp::endpoint(m_address_public, port)
+            );
+            
+            msg.protocol_addr().addr_list.push_back(addr);
+        }
         
         /**
          * Encode the message.
@@ -405,7 +262,121 @@ void tcp_connection::send_addr_message(const bool & local_address_only)
 }
 
 void tcp_connection::send_getblocks_message(
-    const std::shared_ptr<block_index> & index_begin, const sha256 & hash_end
+    const sha256 & hash_stop, const block_locator & locator
+    )
+{
+    /**
+     * Only send a getblocks message if the remote node is a peer.
+     */
+    if (
+        (m_protocol_version_services & protocol::operation_mode_peer) == 1
+        )
+    {
+        if (globals::instance().is_client_spv() == true)
+        {
+            auto should_send_spv_getblocks =
+                globals::instance().spv_use_getblocks() == true
+            ;
+            
+            if (
+                should_send_spv_getblocks &&
+                m_identifier == globals::instance(
+                ).spv_active_tcp_connection_identifier())
+            {
+                should_send_spv_getblocks = true;
+            }
+            
+            if (should_send_spv_getblocks == true)
+            {
+                if (auto t = m_tcp_transport.lock())
+                {
+                    /**
+                     * Set the last time we sent a getblocks.
+                     */
+                    time_last_getblocks_sent_ = std::time(0);
+        
+                    /**
+                     * Allocate the message.
+                     */
+                    message msg("getblocks");
+                    
+                    /**
+                     * Set the hashes.
+                     */
+                    msg.protocol_getblocks().hashes = locator.have();
+                    
+                    /**
+                     * Set the stop hash.
+                     */
+                    msg.protocol_getblocks().hash_stop = hash_stop;
+                    
+                    log_none("TCP connection is sending (SPV) getblocks.");
+                    
+                    /**
+                     * Encode the message.
+                     */
+                    msg.encode();
+                    
+                    if (
+                        m_identifier == globals::instance(
+                        ).spv_active_tcp_connection_identifier() &&
+                        utility::is_spv_initial_block_download() == true
+                        )
+                    {
+                        auto self(shared_from_this());
+                        
+                        /**
+                         * Starts the (SPV) getblocks timeout timer.
+                         */
+                        timer_spv_getblocks_timeout_.expires_from_now(
+                            std::chrono::seconds(8)
+                        );
+                        timer_spv_getblocks_timeout_.async_wait(
+                            strand_.wrap(
+                            [this, self](boost::system::error_code ec)
+                        {
+                            if (ec)
+                            {
+                                // ...
+                            }
+                            else
+                            {
+                                log_info(
+                                    "TCP connection " << m_identifier <<
+                                    " (SPV) getblocks timed out, stopping."
+                                );
+                                
+                                /**
+                                 * Stop
+                                 */
+                                stop();
+                            }
+                        }));
+                    }
+                    
+                    /**
+                     * Write the message.
+                     */
+                    t->write(msg.data(), msg.size());
+                }
+                else
+                {
+                    stop();
+                }
+            }
+        }
+        else
+        {
+            log_error(
+                "TCP connection tried to send (SPV) getblocks message when "
+                "not in SPV client mode."
+            );
+        }
+    }
+}
+
+void tcp_connection::send_getblocks_message(
+    const block_index * index_begin, const sha256 & hash_end
     )
 {
     /**
@@ -425,216 +396,105 @@ void tcp_connection::send_getblocks_message(
         {
             return;
         }
-        
+
         /**
-         * Only allow one getblocks message every 3 seconds per connection.
+         * Set the last time we sent a getblocks.
          */
-        if (std::time(0) - time_last_getblocks_sent_ >= 3)
+        time_last_getblocks_sent_ = std::time(0);
+        
+        last_getblocks_index_begin_ =
+            const_cast<block_index *> (index_begin)
+        ;
+        last_getblocks_hash_end_ = hash_end;
+        
+        if (auto t = m_tcp_transport.lock())
         {
             /**
-             * Set the last time we sent a getblocks.
+             * Allocate the message.
              */
-            time_last_getblocks_sent_ = std::time(0);
+            message msg("getblocks");
             
-            last_getblocks_index_begin_ = index_begin;
-            last_getblocks_hash_end_ = hash_end;
+            /**
+             * Set the hashes.
+             */
+            msg.protocol_getblocks().hashes =
+                block_locator(index_begin).have()
+            ;
             
-            if (auto t = m_tcp_transport.lock())
-            {
-                /**
-                 * Allocate the message.
-                 */
-                message msg("getblocks");
-                
-                /**
-                 * Set the hashes.
-                 */
-                msg.protocol_getblocks().hashes =
-                    block_locator(index_begin).have()
-                ;
-                
-                /**
-                 * Set the stop hash.
-                 */
-                msg.protocol_getblocks().hash_stop = hash_end;
-                
-                log_none("TCP connection is sending getblocks.");
-                
-                /**
-                 * Encode the message.
-                 */
-                msg.encode();
-                
-                /**
-                 * Write the message.
-                 */
-                t->write(msg.data(), msg.size());
-            }
-            else
-            {
-                stop();
-            }
+            /**
+             * Set the stop hash.
+             */
+            msg.protocol_getblocks().hash_stop = hash_end;
+            
+            log_none("TCP connection is sending getblocks.");
+            
+            /**
+             * Encode the message.
+             */
+            msg.encode();
+            
+            /**
+             * Write the message.
+             */
+            t->write(msg.data(), msg.size());
         }
         else
         {
-            log_none(
-                "TCP connection tried to send getblocks message too soon."
-            );
+            stop();
         }
     }
 }
 
 void tcp_connection::send_inv_message(
-    const inventory_vector::type_t & type, const sha256 & hash_block
+    const inventory_vector::type_t type, const sha256 hash_block
     )
 {
-    if (auto t = m_tcp_transport.lock())
+    auto self(shared_from_this());
+    
+    /**
+     * Post the operation onto the boost::asio::io_service.
+     */
+    io_service_.post(strand_.wrap([this, self, type, hash_block]()
     {
-        /**
-         * Allocate the message.
-         */
-        message msg("inv");
-        
-        /**
-         * Set the inventory_vector.
-         */
-        msg.protocol_inv().inventory.push_back(
-            inventory_vector(type, hash_block)
-        );
-        
-        /**
-         * Set the count.
-         */
-        msg.protocol_inv().count = msg.protocol_inv().inventory.size();
-        
-        log_none("TCP connection is sending inv.");
-        
-        /**
-         * Encode the message.
-         */
-        msg.encode();
-        
-        /**
-         * Write the message.
-         */
-        t->write(msg.data(), msg.size());
-    }
-    else
-    {
-        stop();
-    }
+        do_send_inv_message(type, hash_block);
+    }));
 }
 
 void tcp_connection::send_inv_message(
-    const inventory_vector::type_t & type,
-    const std::vector<sha256> & block_hashes
+    const inventory_vector::type_t type,
+    const std::vector<sha256> block_hashes
     )
 {
-    if (auto t = m_tcp_transport.lock())
+    auto self(shared_from_this());
+    
+    /**
+     * Post the operation onto the boost::asio::io_service.
+     */
+    io_service_.post(strand_.wrap([this, self, type, block_hashes]()
     {
-        /**
-         * Allocate the message.
-         */
-        message msg("inv");
-        
-        for (auto & i : block_hashes)
-        {
-            /**
-             * Append the inventory_vector.
-             */
-            msg.protocol_inv().inventory.push_back(
-                inventory_vector(type, i)
-            );
-        }
-        
-        /**
-         * Set the count.
-         */
-        msg.protocol_inv().count = msg.protocol_inv().inventory.size();
-        
-        log_none(
-            "TCP connection is sending inv, count = " <<
-            msg.protocol_inv().count << "."
-        );
-        
-        /**
-         * Encode the message.
-         */
-        msg.encode();
-        
-        /**
-         * Write the message.
-         */
-        t->write(msg.data(), msg.size());
-    }
-    else
-    {
-        stop();
-    }
+        do_send_inv_message(type, block_hashes);
+    }));
 }
 
 void tcp_connection::send_relayed_inv_message(
-    const inventory_vector & inv, const data_buffer & buffer
+    const inventory_vector inv, const data_buffer buffer
     )
 {
+    auto self(shared_from_this());
+    
     /**
-     * Expire old relay messages.
+     * Post the operation onto the boost::asio::io_service.
      */
-    while (
-        globals::instance().relay_inv_expirations().size() > 0 &&
-        globals::instance().relay_inv_expirations().front().first < std::time(0)
-        )
+    io_service_.post(strand_.wrap([this, self, inv, buffer]()
     {
-        globals::instance().relay_invs().erase(
-            globals::instance().relay_inv_expirations().front().second
-        );
-        
-        globals::instance().relay_inv_expirations().pop_front();
-    }
-
-    /**
-     * Save original serialized message so newer versions are preserved.
-     */
-    globals::instance().relay_invs().insert(std::make_pair(inv, buffer));
-    
-    globals::instance().relay_inv_expirations().push_back(
-        std::make_pair(std::time(0) + 15 * 60, inv)
-    );
-    
-    if (auto t = m_tcp_transport.lock())
-    {
-        /**
-         * Allocate the message.
-         */
-        message msg(inv.command(), buffer);
-
-        /**
-         * Encode the message.
-         */
-        msg.encode();
-
-        log_debug(
-            "TCP connection is sending (relayed) inv message, command = " <<
-            inv.command() << ", buffer size = " << buffer.size() << "."
-        );
-    
-        /**
-         * Write the message.
-         */
-        t->write(msg.data(), msg.size());
-    }
-    else
-    {
-        stop();
-    }
+        do_send_relayed_inv_message(inv, buffer);
+    }));
 }
 
 void tcp_connection::send_getdata_message(
     const std::vector<inventory_vector> & getdata
     )
 {
-    std::lock_guard<std::recursive_mutex> l1(mutex_getdata_);
-    
     /**
      * Only send a getdata message if the remote node is a peer.
      */
@@ -646,7 +506,7 @@ void tcp_connection::send_getdata_message(
          * Append the entries to the end.
          */
         getdata_.insert(getdata_.end(), getdata.begin(), getdata.end());
-        
+
         /**
          * Send the getdata message.
          */
@@ -702,89 +562,138 @@ void tcp_connection::send_checkpoint_message(checkpoint_sync & checkpoint)
     }
 }
 
-void tcp_connection::send_block_message(const block & blk)
+void tcp_connection::send_block_message(const block blk)
 {
-    if (auto t = m_tcp_transport.lock())
+    auto self(shared_from_this());
+    
+    /**
+     * Post the operation onto the boost::asio::io_service.
+     */
+    io_service_.post(strand_.wrap([this, self, blk]()
     {
-        /**
-         * Allocate the message.
-         */
-        message msg("block");
-        
-        /**
-         * Set the block.
-         */
-        msg.protocol_block().blk = std::make_shared<block> (blk);
-        
-        log_none(
-            "TCP connection is sending block " <<
-            msg.protocol_block().blk->get_hash().to_string().substr(0, 20) <<
-            "."
-        );
-        
-        /**
-         * Encode the message.
-         */
-        msg.encode();
-        
-        /**
-         * Write the message.
-         */
-        t->write(msg.data(), msg.size());
-    }
-    else
-    {
-        stop();
-    }
+        do_send_block_message(blk);
+    }));
 }
 
-void tcp_connection::send_cbbroadcast_message(
-    const chainblender_broadcast & cbbroadcast
+void tcp_connection::send_filterload_message(
+    const transaction_bloom_filter & filter
     )
 {
-    if (globals::instance().is_chainblender_enabled())
+    if (globals::instance().is_client_spv() == true)
     {
         if (auto t = m_tcp_transport.lock())
         {
-            if (m_hash_chainblender_session_id.is_empty() == false)
-            {
-                /**
-                 * Allocate the message.
-                 */
-                message msg("cbbroadcast");
+            /**
+             * Allocate the message.
+             */
+            message msg("filterload");
 
-                /**
-                 * Set the cbbroadcast.
-                 */
-                msg.protocol_cbbroadcast().cbbroadcast =
-                    std::make_shared<chainblender_broadcast> (cbbroadcast)
-                ;
+            /**
+             * Set the filterload.
+             */
+            msg.protocol_filterload().filterload =
+                std::make_shared<transaction_bloom_filter> (filter)
+            ;
+            
+            log_info("TCP connection is sending filterload.");
 
-                /**
-                 * Set the session id.
-                 */
-                msg.protocol_cbbroadcast().cbbroadcast->set_session_id(
-                    m_hash_chainblender_session_id
-                );
-
-                log_info("TCP connection is sending cbbroadcast.");
-
-                /**
-                 * Encode the message.
-                 */
-                msg.encode();
-                
-                /**
-                 * Write the message.
-                 */
-                t->write(msg.data(), msg.size());
-            }
+            /**
+             * Encode the message.
+             */
+            msg.encode();
+            
+            /**
+             * Write the message.
+             */
+            t->write(msg.data(), msg.size());
         }
         else
         {
             stop();
         }
     }
+}
+
+void tcp_connection::send_filteradd_message(
+    const std::vector<std::uint8_t> & data
+    )
+{
+    if (globals::instance().is_client_spv() == true)
+    {
+        if (auto t = m_tcp_transport.lock())
+        {
+            /**
+             * Allocate the message.
+             */
+            message msg("filteradd");
+
+            /**
+             * Set the data.
+             */
+            msg.protocol_filteradd().filteradd = data;
+            
+            log_info("TCP connection is sending filteradd.");
+
+            /**
+             * Encode the message.
+             */
+            msg.encode();
+            
+            /**
+             * Write the message.
+             */
+            t->write(msg.data(), msg.size());
+        }
+        else
+        {
+            stop();
+        }
+    }
+}
+
+void tcp_connection::send_filterclear_message()
+{
+    if (globals::instance().is_client_spv() == true)
+    {
+        if (auto t = m_tcp_transport.lock())
+        {
+            /**
+             * Allocate the message.
+             */
+            message msg("filterclear");
+
+            log_info("TCP connection is sending filterclear.");
+
+            /**
+             * Encode the message.
+             */
+            msg.encode();
+            
+            /**
+             * Write the message.
+             */
+            t->write(msg.data(), msg.size());
+        }
+        else
+        {
+            stop();
+        }
+    }
+}
+
+void tcp_connection::send_cbbroadcast_message(
+    const std::shared_ptr<chainblender_broadcast> & cbbroadcast
+    )
+{
+    auto self(shared_from_this());
+    
+    /**
+     * Post the operation onto the boost::asio::io_service.
+     */
+    io_service_.post(strand_.wrap([this, self, cbbroadcast]()
+    {
+        do_send_cbbroadcast_message(cbbroadcast);
+    }));
 }
 
 void tcp_connection::send_cbleave_message()
@@ -837,40 +746,17 @@ void tcp_connection::send_cbleave_message()
     }
 }
 
-void tcp_connection::send_tx_message(const transaction & tx)
+void tcp_connection::send_tx_message(const transaction tx)
 {
-    if (auto t = m_tcp_transport.lock())
+    auto self(shared_from_this());
+    
+    /**
+     * Post the operation onto the boost::asio::io_service.
+     */
+    io_service_.post(strand_.wrap([this, self, tx]()
     {
-        /**
-         * Allocate the message.
-         */
-        message msg("tx");
-
-        /**
-         * Set the tx.
-         */
-        msg.protocol_tx().tx = std::make_shared<transaction> (tx);
-        
-        log_debug(
-            "TCP connection is sending tx " <<
-            msg.protocol_tx().tx->get_hash().to_string().substr(0, 20) <<
-            "."
-        );
-
-        /**
-         * Encode the message.
-         */
-        msg.encode();
-        
-        /**
-         * Write the message.
-         */
-        t->write(msg.data(), msg.size());
-    }
-    else
-    {
-        stop();
-    }
+        do_send_tx_message(tx);
+    }));
 }
 
 void tcp_connection::set_hash_checkpoint_known(const sha256 & val)
@@ -883,12 +769,17 @@ const sha256 & tcp_connection::hash_checkpoint_known() const
     return m_hash_checkpoint_known;
 }
 
-std::set<protocol::network_address_t> &
-    tcp_connection::seen_network_addresses()
+void tcp_connection::clear_seen_network_addresses()
 {
-    std::lock_guard<std::recursive_mutex> l1(mutex_seen_network_addresses_);
+    auto self(shared_from_this());
     
-    return m_seen_network_addresses;
+    /**
+     * Post the operation onto the boost::asio::io_service.
+     */
+    io_service_.post(strand_.wrap([this, self]()
+    {
+        m_seen_network_addresses.clear();
+    }));
 }
 
 void tcp_connection::set_dos_score(const std::uint8_t & val)
@@ -908,7 +799,7 @@ void tcp_connection::set_dos_score(const std::uint8_t & val)
             ;
         
             /**
-             * Ban the address.
+             * Ban the address for 24 hours.
              */
             network::instance().ban_address(addr);
             
@@ -923,6 +814,42 @@ void tcp_connection::set_dos_score(const std::uint8_t & val)
 const std::uint8_t & tcp_connection::dos_score() const
 {
     return m_dos_score;
+}
+
+void tcp_connection::set_spv_dos_score(const double & val)
+{
+    assert(globals::instance().is_client_spv() == true);
+    
+    m_spv_dos_score = val;
+    
+    /**
+     * If the Denial-of-Service score is at least 100% the address is banned
+     * and the connection is dropped.
+     */
+    if (m_spv_dos_score >= 100.0)
+    {
+        if (auto transport = m_tcp_transport.lock())
+        {
+            auto addr =
+                transport->socket().remote_endpoint().address().to_string()
+            ;
+        
+            /**
+             * Ban the address for one hour.
+             */
+            network::instance().ban_address(addr, 1 * 60 * 60);
+            
+            /**
+             * Stop.
+             */
+            stop();
+        }
+    }
+}
+
+const double & tcp_connection::spv_dos_score() const
+{
+    return m_spv_dos_score;
 }
 
 void tcp_connection::set_probe_only(const bool & val)
@@ -947,6 +874,11 @@ const sha256 & tcp_connection::hash_chainblender_session_id() const
     return m_hash_chainblender_session_id;
 }
 
+const std::uint32_t & tcp_connection::identifier() const
+{
+    return m_identifier;
+}
+
 bool tcp_connection::is_transport_valid()
 {
     if (auto transport = m_tcp_transport.lock())
@@ -968,8 +900,6 @@ void tcp_connection::on_read(const char * buf, const std::size_t & len)
          */
         if (buffer.find("HTTP/1.") == std::string::npos)
         {
-            std::lock_guard<std::mutex> l1(mutex_read_queue_);
-
             /**
              * Append to the read queue.
              */
@@ -1033,7 +963,7 @@ void tcp_connection::on_read(const char * buf, const std::size_t & len)
                     
                     /**
                      * If we failed to parse a message with a read queue
-                     * twice the size of block::get_maximum_size_median220()
+                     * twice the size of block::get_maximum_size_median220
                      * then the stream must be corrupted, clear the read queue
                      * and stop the connection.
                      */
@@ -1070,10 +1000,10 @@ void tcp_connection::on_read(const char * buf, const std::size_t & len)
                  * Allocate the user agent comments.
                  */
                 std::vector<std::string> comments;
-
+                
                 if (
-                    globals::instance().operation_mode(
-                    ) == protocol::operation_mode_peer
+                    globals::instance().operation_mode() ==
+                    protocol::operation_mode_peer
                     )
                 {
                     comments.push_back("Peer");
@@ -1100,6 +1030,7 @@ void tcp_connection::on_read(const char * buf, const std::size_t & len)
                     constants::client_name, constants::version_client,
                     comments
                 );
+                
                 /**
                  * Allocate the response.
                  */
@@ -1146,6 +1077,285 @@ void tcp_connection::on_read(const char * buf, const std::size_t & len)
     }
 }
 
+void tcp_connection::do_start()
+{
+    m_state = state_starting;
+    
+    if (m_direction == direction_incoming)
+    {
+        if (auto transport = m_tcp_transport.lock())
+        {
+            auto self(shared_from_this());
+            
+            /**
+             * Set the transport on read handler.
+             */
+            transport->set_on_read(
+                [this, self](std::shared_ptr<tcp_transport> t,
+                const char * buf, const std::size_t & len)
+            {
+                on_read(buf, len);
+            });
+
+            /**
+             * Start the transport accepting the connection.
+             */
+            transport->start();
+            
+            /**
+             * Start the ping timer.
+             */
+            timer_ping_.expires_from_now(
+                std::chrono::seconds(interval_ping / 4)
+            );
+            timer_ping_.async_wait(strand_.wrap(
+                std::bind(&tcp_connection::do_ping, self,
+                std::placeholders::_1))
+            );
+            
+            /**
+             * Start the getblocks timer.
+             */
+            timer_getblocks_.expires_from_now(std::chrono::seconds(1));
+            timer_getblocks_.async_wait(strand_.wrap(
+                std::bind(&tcp_connection::do_send_getblocks, self,
+                std::placeholders::_1))
+            );
+            
+            /**
+             * Start the addr rebroadcast timer.
+             */
+            do_rebroadcast_addr_messages(900);
+        }
+    }
+    else if (m_direction == direction_outgoing)
+    {
+        assert(0);
+    }
+    
+    m_state = state_started;
+}
+
+void tcp_connection::do_start(const boost::asio::ip::tcp::endpoint ep)
+{
+    m_state = state_starting;
+
+    if (m_direction == direction_incoming)
+    {
+        assert(0);
+    }
+    else if (m_direction == direction_outgoing)
+    {
+        if (auto transport = m_tcp_transport.lock())
+        {
+            auto self(shared_from_this());
+            
+            /**
+             * Set the transport on read handler.
+             */
+            transport->set_on_read(
+                [this, self](std::shared_ptr<tcp_transport> t,
+                const char * buf, const std::size_t & len)
+            {
+                on_read(buf, len);
+            });
+
+            /**
+             * Start the transport connecting to the endpoint.
+             */
+            transport->start(
+                ep.address().to_string(), ep.port(), [this, self, ep](
+                boost::system::error_code ec,
+                std::shared_ptr<tcp_transport> transport)
+                {
+                    if (ec)
+                    {
+                        log_none(
+                            "TCP connection to " << ep << " failed, "
+                            "message = " << ec.message() << "."
+                        );
+                        
+                        stop();
+                    }
+                    else
+                    {
+                        log_debug(
+                            "TCP connection to " << ep << " success, sending "
+                            "version message."
+                        );
+        
+                        /**
+                         * Start the version timeout timer.
+                         */
+                        timer_version_timeout_.expires_from_now(
+                            std::chrono::seconds(8)
+                        );
+                        timer_version_timeout_.async_wait(
+                            strand_.wrap(
+                                [this, self](boost::system::error_code ec)
+                                {
+                                    if (ec)
+                                    {
+                                        // ...
+                                    }
+                                    else
+                                    {
+                                        log_error(
+                                            "TCP connection (version) timed "
+                                            "out, calling stop."
+                                        );
+                                    
+                                        /**
+                                         * The connection has timed out, call
+                                         * stop.
+                                         */
+                                        stop();
+                                    }
+                                }
+                            )
+                        );
+                        
+                        /**
+                         * Send a version message.
+                         */
+                        send_version_message();
+                    }
+                }
+            );
+            
+            /**
+             * Start the ping timer.
+             */
+            timer_ping_.expires_from_now(std::chrono::seconds(interval_ping));
+            timer_ping_.async_wait(strand_.wrap(
+                std::bind(&tcp_connection::do_ping, self,
+                std::placeholders::_1))
+            );
+            
+            /**
+             * Start the getblocks timer.
+             */
+            timer_getblocks_.expires_from_now(std::chrono::seconds(1));
+            timer_getblocks_.async_wait(strand_.wrap(
+                std::bind(&tcp_connection::do_send_getblocks, self,
+                std::placeholders::_1))
+            );
+            
+            /**
+             * Start the addr rebroadcast timer.
+             */
+            do_rebroadcast_addr_messages(300);
+        }
+        else
+        {
+            assert(0);
+        }
+    }
+    
+    m_state = state_started;
+}
+
+void tcp_connection::do_stop()
+{
+    m_state = state_stopping;
+    
+    std::lock_guard<std::recursive_mutex> l1(stack_impl::mutex());
+    
+    /**
+     * If we are a part of a chainblender session we need to reduce the
+     * participants count.
+     */
+    if (m_hash_chainblender_session_id.is_empty() == false)
+    {
+        /**
+         * Get the sessions.
+         */
+        auto & sessions = chainblender::instance().sessions();
+        
+        if (
+            sessions.count(m_hash_chainblender_session_id) > 0
+            )
+        {
+            if (
+                sessions[m_hash_chainblender_session_id].participants > 0
+                )
+            {
+                sessions[
+                    m_hash_chainblender_session_id
+                ].participants -= 1;
+            }
+            else
+            {
+                sessions.erase(m_hash_chainblender_session_id);
+            }
+        }
+    }
+    
+    /**
+     * If we are an (SPV) client set the active identifier to that of another
+     * tcp_connection object.
+     */
+    if (globals::instance().is_client_spv() == true)
+    {
+        if (stack_impl_.get_tcp_connection_manager())
+        {
+            const auto & tcp_connections =
+                stack_impl_.get_tcp_connection_manager()->tcp_connections()
+            ;
+            
+            for (auto & i : tcp_connections)
+            {
+                if (auto connection = i.second.lock())
+                {
+                    if (
+                        connection->is_transport_valid() &&
+                        connection->identifier() != m_identifier
+                        )
+                    {
+                        globals::instance(
+                            ).set_spv_active_tcp_connection_identifier(
+                            connection->identifier()
+                        );
+                        
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    
+    /**
+     * Stop the transport.
+     */
+    if (auto t = m_tcp_transport.lock())
+    {
+        t->stop();
+    }
+    
+    /**
+     * Remove references to shared pointers.
+     */
+    m_oneshot_ztquestion = nullptr,
+        m_on_probe = nullptr, m_on_ianswer = nullptr, m_on_cbstatus = nullptr,
+        m_on_cbbroadcast = nullptr, m_chainblender_join = nullptr;
+    ;
+    
+    read_queue_.clear();
+    timer_ping_.cancel();
+    timer_version_timeout_.cancel();
+    timer_ping_timeout_.cancel();
+    timer_getblocks_.cancel();
+    timer_getheaders_.cancel();
+    timer_addr_rebroadcast_.cancel();
+    timer_cbstatus_.cancel();
+    timer_delayed_stop_.cancel();
+    timer_spv_getheader_timeout_.cancel();
+    timer_spv_getblocks_timeout_.cancel();
+    timer_isync_.cancel();
+    
+    m_state = state_stopped;
+}
+
 void tcp_connection::send_verack_message()
 {
     if (auto t = m_tcp_transport.lock())
@@ -1175,6 +1385,8 @@ void tcp_connection::send_version_message()
 {
     if (auto t = m_tcp_transport.lock())
     {
+        std::lock_guard<std::recursive_mutex> l1(stack_impl::mutex());
+        
         /**
          * Allocate the message.
          */
@@ -1183,7 +1395,10 @@ void tcp_connection::send_version_message()
         /**
          * Get our network port.
          */
-        auto port = stack_impl_.get_tcp_acceptor()->local_endpoint().port();
+        auto port =
+            globals::instance().is_client_spv() == true ? 0 :
+            stack_impl_.get_tcp_acceptor()->local_endpoint().port()
+        ;
         
         /**
          * Set the version addr_src address.
@@ -1257,8 +1472,6 @@ void tcp_connection::do_send_addr_message(
     const protocol::network_address_t & addr
     )
 {
-    std::lock_guard<std::recursive_mutex> l1(mutex_seen_network_addresses_);
-    
     if (m_seen_network_addresses.count(addr) == 0)
     {
         /**
@@ -1289,6 +1502,89 @@ void tcp_connection::do_send_addr_message(
         {
             stop();
         }
+    }
+}
+
+void tcp_connection::do_send_cbbroadcast_message(
+    const std::shared_ptr<chainblender_broadcast> & cbbroadcast
+    )
+{
+    if (globals::instance().is_chainblender_enabled())
+    {
+        if (auto t = m_tcp_transport.lock())
+        {
+            if (m_hash_chainblender_session_id.is_empty() == false)
+            {
+                /**
+                 * Allocate the message.
+                 */
+                message msg("cbbroadcast");
+
+                /**
+                 * Set the cbbroadcast.
+                 */
+                msg.protocol_cbbroadcast().cbbroadcast = cbbroadcast;
+
+                /**
+                 * Set the session id.
+                 */
+                msg.protocol_cbbroadcast().cbbroadcast->set_session_id(
+                    m_hash_chainblender_session_id
+                );
+
+                log_info("TCP connection is sending cbbroadcast.");
+
+                /**
+                 * Encode the message.
+                 */
+                msg.encode();
+                
+                /**
+                 * Write the message.
+                 */
+                t->write(msg.data(), msg.size());
+            }
+        }
+        else
+        {
+            stop();
+        }
+    }
+}
+
+void tcp_connection::do_send_tx_message(const transaction & tx)
+{
+    if (auto t = m_tcp_transport.lock())
+    {
+        /**
+         * Allocate the message.
+         */
+        message msg("tx");
+
+        /**
+         * Set the tx.
+         */
+        msg.protocol_tx().tx = std::make_shared<transaction> (tx);
+        
+        log_debug(
+            "TCP connection is sending tx " <<
+            msg.protocol_tx().tx->get_hash().to_string().substr(0, 20) <<
+            "."
+        );
+
+        /**
+         * Encode the message.
+         */
+        msg.encode();
+        
+        /**
+         * Write the message.
+         */
+        t->write(msg.data(), msg.size());
+    }
+    else
+    {
+        stop();
     }
 }
 
@@ -1386,8 +1682,6 @@ void tcp_connection::send_getdata_message()
 {
     if (auto t = m_tcp_transport.lock())
     {
-        std::lock_guard<std::recursive_mutex> l1(mutex_getdata_);
-        
         /**
          * Only send a getdata message if the remote node is a peer.
          */
@@ -1412,10 +1706,22 @@ void tcp_connection::send_getdata_message()
                  */
                 getdata_.clear();
                 
-                log_none(
-                    "TCP connection is sending getdata, count = " <<
-                    msg.protocol_getdata().inventory.size() << "."
-                );
+                if (msg.protocol_getdata().inventory.size() == 1)
+                {
+                    log_info(
+                        "TCP connection " << m_identifier << " is sending "
+                        "getdata, count = 1, type = " <<
+                        msg.protocol_getdata().inventory[0].type()
+                    );
+                }
+                else
+                {
+                    log_info(
+                        "TCP connection " << m_identifier << " is sending "
+                        "getdata, count = " <<
+                        msg.protocol_getdata().inventory.size() << "."
+                    );
+                }
                 
                 /**
                  * Encode the message.
@@ -1467,6 +1773,85 @@ void tcp_connection::send_headers_message(const std::vector<block> & headers)
     else
     {
         stop();
+    }
+}
+
+void tcp_connection::send_getheaders_message(
+    const sha256 & hash_stop, const block_locator & locator
+    )
+{
+    if (globals::instance().is_client_spv() == true)
+    {
+        if (
+            m_identifier == globals::instance(
+            ).spv_active_tcp_connection_identifier()
+            )
+        {
+            if (auto t = m_tcp_transport.lock())
+            {
+                /**
+                 * Allocate the message.
+                 */
+                message msg("getheaders");
+                
+                /**
+                 * Set the getheaders.
+                 */
+                msg.protocol_getheaders().hash_stop = hash_stop;
+                msg.protocol_getheaders().locator =
+                    std::make_shared<block_locator> (locator)
+                ;
+                
+                log_debug(
+                    "TCP connection is sending getheaders, hash_stop = " <<
+                    msg.protocol_getheaders().hash_stop.to_string().substr(
+                    0, 8) << "."
+                );
+
+                /**
+                 * Encode the message.
+                 */
+                msg.encode();
+                
+                auto self(shared_from_this());
+                
+                /**
+                 * Starts the (SPV) getheaders timeout timer.
+                 */
+                timer_spv_getheader_timeout_.expires_from_now(
+                    std::chrono::seconds(8)
+                );
+                timer_spv_getheader_timeout_.async_wait(strand_.wrap(
+                    [this, self](boost::system::error_code ec)
+                {
+                    if (ec)
+                    {
+                        // ...
+                    }
+                    else
+                    {
+                        log_debug(
+                            "TCP connection " << m_identifier << " (SPV) "
+                            "getheaders timed out, stopping."
+                        );
+                        
+                        /**
+                         * Stop
+                         */
+                        stop();
+                    }
+                }));
+    
+                /**
+                 * Write the message.
+                 */
+                t->write(msg.data(), msg.size());
+            }
+            else
+            {
+                stop();
+            }
+        }
     }
 }
 
@@ -1750,6 +2135,124 @@ void tcp_connection::send_ivote_message(const incentive_vote & ivote)
     }
 }
 
+void tcp_connection::send_isync_message()
+{
+    if (globals::instance().is_incentive_enabled() == true)
+    {
+        /**
+         * Only send an isync message if the remote node is a peer.
+         */
+        if (
+            (m_protocol_version_services & protocol::operation_mode_peer) == 1
+            )
+        {
+            if (auto t = m_tcp_transport.lock())
+            {
+                /**
+                 * Allocate the message.
+                 */
+                message msg("isync");
+
+                /**
+                 * Get the recent good endpoints.
+                 */
+                auto recent_good_endpoints =
+                    stack_impl_.get_address_manager(
+                    )->recent_good_endpoints()
+                ;
+
+                std::set<std::string> filter;
+                
+                /**
+                 * Iterate the recent good endpoints looking for wallet
+                 * addresses we already have collateral for.
+                 */
+                for (auto & i : recent_good_endpoints)
+                {
+                    filter.insert(i.wallet_address);
+                }
+                
+                /**
+                 * Set the isync.
+                 */
+                msg.protocol_isync().isync =
+                    std::make_shared<incentive_sync> (filter)
+                ;
+                
+                log_info(
+                    "TCP connection is sending isync, filter size = " <<
+                    msg.protocol_isync().isync->filter().size() << "."
+                );
+
+                /**
+                 * Encode the message.
+                 */
+                msg.encode();
+                
+                /**
+                 * Write the message.
+                 */
+                t->write(msg.data(), msg.size());
+            }
+            else
+            {
+                stop();
+            }
+        }
+    }
+}
+
+void tcp_connection::send_icols_message(
+    const incentive_collaterals & icols
+    )
+{
+    if (globals::instance().is_incentive_enabled())
+    {
+        /**
+         * Only send an icols message if the remote node is a peer.
+         */
+        if (
+            (m_protocol_version_services & protocol::operation_mode_peer) == 1
+            )
+        {
+            if (auto t = m_tcp_transport.lock())
+            {
+                /**
+                 * Allocate the message.
+                 */
+                message msg("icols");
+
+                /**
+                 * Set the icols.
+                 */
+                msg.protocol_icols().icols =
+                    std::make_shared<incentive_collaterals> (icols)
+                ;
+                
+                log_info(
+                    "TCP connection is sending " <<
+                    msg.protocol_icols().icols->collaterals().size() <<
+                    " icols ."
+                );
+
+                /**
+                 * Encode the message.
+                 */
+                msg.encode();
+                
+                /**
+                 * Write the message.
+                 */
+                t->write(msg.data(), msg.size());
+            }
+            else
+            {
+                stop();
+            }
+        }
+    }
+}
+
 void tcp_connection::send_cbjoin_message(const chainblender_join & cbjoin)
 {
     if (globals::instance().is_chainblender_enabled())
@@ -1978,6 +2481,8 @@ void tcp_connection::relay_checkpoint(const checkpoint_sync & checkpoint)
          */
         msg_checkpoint.encode();
 
+        std::lock_guard<std::recursive_mutex> l1(stack_impl::mutex());
+        
         /**
          * Broadcast (Relay) the message to "all" connected peers.
          */
@@ -2011,7 +2516,9 @@ void tcp_connection::relay_alert(const alert & msg)
                  * Encode the message.
                  */
                 msg_alert.encode();
-
+                
+                std::lock_guard<std::recursive_mutex> l1(stack_impl::mutex());
+                
                 /**
                  * Broadcast (Relay) the message to "all" connected peers.
                  */
@@ -2027,6 +2534,8 @@ void tcp_connection::relay_inv(
     const inventory_vector & inv, const data_buffer & buffer
     )
 {
+    std::lock_guard<std::recursive_mutex> l1(stack_impl::mutex());
+    
     /**
      * Expire old relay messages.
      */
@@ -2103,9 +2612,31 @@ bool tcp_connection::handle_message(message & msg)
         
         return false;
     }
-    else if (msg.header().command == "verack")
+    
+    std::lock_guard<std::recursive_mutex> l1(stack_impl::mutex());
+    
+    if (globals::instance().is_client_spv() == true)
     {
-        // ...
+        if (spv_block_merkle_current_ && msg.header().command != "tx")
+        {
+            log_debug(
+                "TCP connection detected invalid block_merkle, "
+                "expected = " <<
+                spv_block_merkle_current_->transactions_matched().size() <<
+                ", got = " << spv_transactions_current_.size() << ", returning."
+            );
+            
+            spv_block_merkle_current_ = nullptr;
+            
+            spv_transactions_current_.clear();
+        
+            return false;
+        }
+    }
+
+    if (msg.header().command == "verack")
+    {
+        timer_version_timeout_.cancel();
     }
     else if (msg.header().command == "version")
     {
@@ -2190,8 +2721,9 @@ bool tcp_connection::handle_message(message & msg)
                     msg.protocol_version().start_height
                 ;
                 
-                log_none(
-                    "TCP connection got version = " << m_protocol_version << "."
+                log_debug(
+                    "TCP connection " << m_identifier <<
+                    " got version = " << m_protocol_version << "."
                 );
 
                 /**
@@ -2257,6 +2789,39 @@ bool tcp_connection::handle_message(message & msg)
                                 );
                             }
                         }
+                        
+                        auto self(shared_from_this());
+                        
+                        /**
+                         * Start the version timeout timer.
+                         */
+                        timer_version_timeout_.expires_from_now(
+                            std::chrono::seconds(8)
+                        );
+                        timer_version_timeout_.async_wait(
+                            strand_.wrap(
+                                [this, self](boost::system::error_code ec)
+                                {
+                                    if (ec)
+                                    {
+                                        // ...
+                                    }
+                                    else
+                                    {
+                                        log_error(
+                                            "TCP connection (version) timed "
+                                            "out, calling stop."
+                                        );
+                                    
+                                        /**
+                                         * The connection has timed out, call
+                                         * stop.
+                                         */
+                                        stop();
+                                    }
+                                }
+                            )
+                        );
                         
                         /**
                          * Send a version message.
@@ -2417,7 +2982,18 @@ bool tcp_connection::handle_message(message & msg)
             else
             {
                 /**
-                 * Send bip-0035 mempool message.
+                 * If we are an (SPV) client set this connection as the active
+                 * tcp_connection.
+                 */
+                if (globals::instance().is_client_spv() == true)
+                {
+                    globals::instance(
+                        ).set_spv_active_tcp_connection_identifier(m_identifier
+                    );
+                }
+                
+                /**
+                 * Send BIP-0035 mempool message.
                  */
                 if (
                     m_direction == direction_outgoing &&
@@ -2426,12 +3002,92 @@ bool tcp_connection::handle_message(message & msg)
                 {
                     send_mempool_message();
                 }
+
+                /**
+                 * Send isync message.
+                 */
+                if (m_direction == direction_outgoing)
+                {
+                    do_send_isync(8);
+                }
                 
                 /**
-                 * If we have never sent a getblocks message or if our best
+                 * If we are an (SPV) client send a filterfload message before
+                 * sending a getheaders or getblocks message.
+                 */
+                if (globals::instance().is_client_spv() == true)
+                {
+                    /**
+                     * Send the filter load message.
+                     */
+                    send_filterload_message(
+                        *globals::instance().spv_transaction_bloom_filter()
+                    );
+                }
+                
+                /**
+                 * If we are an (SPV) client send a getheaders message otherwise
+                 * if we have never sent a getblocks message or if our best
                  * block is the genesis block send getblocks.
                  */
-                if (
+                if (globals::instance().is_client_spv() == true)
+                {
+                    if (globals::instance().spv_use_getblocks() == false)
+                    {
+                        /**
+                         * Get the block_locator hashes.
+                         */
+                        const auto & block_locator_hashes =
+                            globals::instance().spv_block_locator_hashes()
+                        ;
+                        
+                        /**
+                         * Allocate the block_locator with the last and
+                         * first hash.
+                         */
+                        block_locator locator(block_locator_hashes);
+                        
+                        /**
+                         * Send the getheaders message.
+                         */
+                        send_getheaders_message(sha256(), locator);
+                        
+                        auto self(shared_from_this());
+                        
+                        /**
+                         * Start the getheaders timer.
+                         */
+                        timer_getheaders_.expires_from_now(
+                            std::chrono::seconds(8)
+                        );
+                        timer_getheaders_.async_wait(
+                            strand_.wrap(
+                            std::bind(&tcp_connection::do_send_getheaders, self,
+                            std::placeholders::_1))
+                        );
+                    }
+                    else
+                    {
+                        /**
+                         * Get the block_locator hashes.
+                         */
+                        const auto & block_locator_hashes =
+                            globals::instance().spv_block_locator_hashes()
+                        ;
+                        
+                        /**
+                         * Allocate the block_locator with the last and
+                         * first hash.
+                         */
+                        block_locator locator(block_locator_hashes);
+                        
+                        /**
+                         * Send the getblocks message.
+                         */
+                        send_getblocks_message(sha256(), locator);
+                    }
+                }
+                else if (
                     did_send_getblocks_ == false ||
                     (constants::test_net == true &&
                     stack_impl::get_block_index_best()->get_block_hash() ==
@@ -2530,10 +3186,6 @@ bool tcp_connection::handle_message(message & msg)
             auto since = now - 10 * 60;
         
             auto addr_list = msg.protocol_addr().addr_list;
-            
-            std::lock_guard<std::recursive_mutex> l1(
-                mutex_seen_network_addresses_
-            );
             
             for (auto & i : addr_list)
             {
@@ -2686,6 +3338,12 @@ bool tcp_connection::handle_message(message & msg)
     }
     else if (msg.header().command == "inv")
     {
+        /**
+         * If true we must send an SPV getblocks message AFTER sending
+         * a getdata message on the current block.
+         */
+        auto should_send_spv_getblocks = false;
+        
         if (msg.protocol_inv().inventory.size() > protocol::max_inv_size)
         {
             /**
@@ -2695,105 +3353,159 @@ bool tcp_connection::handle_message(message & msg)
         }
         else
         {
-            /**
-             * Find the last block in the inventory vector.
-             */
-            std::uint32_t last_block = static_cast<std::uint32_t> (-1);
-            
-            for (auto i = 0; i < msg.protocol_inv().inventory.size(); i++)
+            if (globals::instance().is_client_spv() == false)
             {
-                if (
-                    msg.protocol_inv().inventory[
-                    msg.protocol_inv().inventory.size() - 1 - i].type() ==
-                    inventory_vector::type_msg_block
-                    )
+                /**
+                 * Find the last block in the inventory vector.
+                 */
+                auto last_block = static_cast<std::uint32_t> (-1);
+                
+                for (auto i = 0; i < msg.protocol_inv().inventory.size(); i++)
                 {
-                    last_block = static_cast<std::uint32_t> (
-                        msg.protocol_inv().inventory.size() - 1 - i
-                    );
-                    
-                    break;
+                    if (
+                        msg.protocol_inv().inventory[
+                        msg.protocol_inv().inventory.size() - 1 - i].type() ==
+                        inventory_vector::type_msg_block
+                        )
+                    {
+                        last_block = static_cast<std::uint32_t> (
+                            msg.protocol_inv().inventory.size() - 1 - i
+                        );
+                        
+                        break;
+                    }
                 }
-            }
-            
-            std::lock_guard<std::recursive_mutex> l1(mutex_getdata_);
-            
-            /**
-             * Open the transaction database for reading.
-             */
-            db_tx tx_db("r");
-            
-            auto index = 0;
-            
-            auto inventory = msg.protocol_inv().inventory;
+                
+                /**
+                 * Open the transaction database for reading.
+                 */
+                db_tx tx_db("r");
+                
+                auto index = 0;
+                
+                auto inventory = msg.protocol_inv().inventory;
 
-            for (auto & i : inventory)
-            {
-                auto already_have = inventory_vector::already_have(tx_db, i);
+                for (auto & i : inventory)
+                {
+                    insert_inventory_vector_seen(i);
                 
-                if (globals::instance().debug() && false)
-                {
-                    log_debug(
-                        "Connection got inv = " << i.to_string() <<
-                        (already_have ? " have" : " new") << "."
-                    );
-                }
-                
-                if (already_have == false)
-                {
-                     /**
-                      * Ask for the data.
-                      */
-                     getdata_.push_back(i);
-                }
-                else if (
-                    i.type() == inventory_vector::type_msg_block &&
-                    globals::instance().orphan_blocks().count(i.hash())
-                    )
-                {
-                    send_getblocks_message(
-                        stack_impl::get_block_index_best(),
-                        utility::get_orphan_root(
-                        globals::instance().orphan_blocks()[i.hash()])
-                    );
-                }
-                else if (index == last_block)
-                {
-                    /**
-                     * In case we are on a very long side-chain, it is possible
-                     * that we already have the last block in an inv bundle
-                     * sent in response to getblocks. Try to detect this
-                     * situation and push another getblocks to continue.
-                     */
-                    send_getblocks_message(
-                        globals::instance().block_indexes()[i.hash()],
-                        sha256()
+                    auto already_have = inventory_vector::already_have(
+                        tx_db, i
                     );
                     
                     if (globals::instance().debug() && false)
                     {
                         log_debug(
-                            "Connection is forcing getblocks request " <<
-                            i.to_string() << "."
+                            "Connection got inv = " << i.to_string() <<
+                            (already_have ? " have" : " new") << "."
                         );
                     }
+                    
+                    if (already_have == false)
+                    {
+                        /**
+                         * Ask for the data.
+                         */
+                        getdata_.push_back(i);
+                    }
+                    else if (
+                        i.type() == inventory_vector::type_msg_block &&
+                        globals::instance().orphan_blocks().count(i.hash())
+                        )
+                    {
+                        send_getblocks_message(
+                            stack_impl::get_block_index_best(),
+                            utility::get_orphan_root(
+                            globals::instance().orphan_blocks()[i.hash()])
+                        );
+                    }
+                    else if (index == last_block)
+                    {
+                        /**
+                         * In case we are on a very long side-chain, it is possible
+                         * that we already have the last block in an inv bundle
+                         * sent in response to getblocks. Try to detect this
+                         * situation and push another getblocks to continue.
+                         */
+                        send_getblocks_message(
+                            globals::instance().block_indexes()[i.hash()],
+                            sha256()
+                        );
+                        
+                        if (globals::instance().debug() && false)
+                        {
+                            log_debug(
+                                "Connection is forcing getblocks request " <<
+                                i.to_string() << "."
+                            );
+                        }
+                    }
+                    
+                    /**
+                     * Inform the wallet manager.
+                     */
+                    wallet_manager::instance().on_inventory(i.hash());
+                    
+                    index++;
                 }
-                
+            }
+            else
+            {
                 /**
-                 * Inform the wallet manager.
+                 * ZeroLedger :-)
                  */
-                wallet_manager::instance().on_inventory(i.hash());
-                
-                index++;
             }
         }
         
         /**
+         * If we are an (SPV) client add any matched transaction hashes
+         * from the merkle block to the next getdata message.
+         */
+        if (globals::instance().is_client_spv() == true)
+        {
+            for (auto & i : spv_transactions_matched_)
+            {
+                inventory_vector inv(inventory_vector::type_msg_tx, i);
+                
+                /**
+                 * Ask for the data.
+                 */
+                getdata_.push_back(inv);
+            }
+            
+            spv_transactions_matched_.clear();
+        }
+
+        /**
          * If we have some getdata send it now.
          */
-        if (getdata_.size() > 0)
+        send_getdata_message();
+        
+        /**
+         * If we should send SPV getblocks do so now.
+         */
+        if (
+            globals::instance().is_client_spv() == true &&
+            should_send_spv_getblocks == true
+            )
         {
-            send_getdata_message();
+            /**
+             * Get the block_locator hashes.
+             */
+            const auto & block_locator_hashes =
+                globals::instance().spv_block_locator_hashes()
+            ;
+
+            /**
+             * Allocate the block_locator with the last and
+             * first hash.
+             */
+            block_locator locator(block_locator_hashes);
+
+            /**
+             * Send the getblocks message.
+             */
+            send_getblocks_message(sha256(), locator);
         }
     }
     else if (msg.header().command == "getdata")
@@ -2870,7 +3582,7 @@ bool tcp_connection::handle_message(message & msg)
                                 /**
                                  * Send the block message.
                                  */
-                                send_block_message(blk);
+                                do_send_block_message(blk);
                             }
                             else
                             {
@@ -2890,21 +3602,21 @@ bool tcp_connection::handle_message(message & msg)
                                      * Send the merkleblock message.
                                      */
                                     send_merkleblock_message(merkle_block);
-
+                                    
                                     for (
                                         auto & i :
                                         merkle_block.transactions_matched()
                                         )
                                     {
-										for (auto & j : blk.transactions())
+                                        for (auto & j : blk.transactions())
                                         {
-											if (i.second == j.get_hash())
-											{
-												/**
-												 * Send the tx message.
-												 */
-												send_tx_message(j);
-											}
+                                            if (i.second == j.get_hash())
+                                            {
+                                                /**
+                                                 * Send the tx message.
+                                                 */
+                                                send_tx_message(j);
+                                            }
                                         }
                                     }
                                 }
@@ -2937,7 +3649,7 @@ bool tcp_connection::handle_message(message & msg)
                                 /**
                                  * Send an inv message.
                                  */
-                                send_inv_message(
+                                do_send_inv_message(
                                     inventory_vector::type_msg_block,
                                     block_hashes
                                 );
@@ -2963,7 +3675,7 @@ bool tcp_connection::handle_message(message & msg)
                             /**
                              * Send the relayed inv message.
                              */
-                            send_relayed_inv_message(
+                            do_send_relayed_inv_message(
                                 i, data_buffer(it->second.data(),
                                 it->second.size())
                             );
@@ -3048,159 +3760,134 @@ bool tcp_connection::handle_message(message & msg)
     }
     else if (msg.header().command == "getblocks")
     {
+        /**
+         * If we are a peer with an up-to-date blockchain handle the
+         * getblocks message.
+         */
         if (
-            (m_protocol_version_services &
-            protocol::operation_mode_peer) == 1 &&
-            std::time(0) - time_last_getblocks_received_ < 3
+            utility::is_initial_block_download() == false &&
+            globals::instance().operation_mode() ==
+            protocol::operation_mode_peer
             )
         {
+            /**
+             * Find the last block the sender has in the main chain.
+             */
+            auto index = block_locator(
+                msg.protocol_getblocks().hashes
+            ).get_block_index();
+            
+            /**
+             * Send the rest of the chain.
+             */
+            if (index)
+            {
+                index = index->block_index_next();
+            }
+            
+            /**
+             * We send 500 block hashes.
+             */
+            enum { default_blocks = 500 };
+            
+            /**
+             * The limit on the number of blocks to send.
+             */
+            std::int16_t limit = default_blocks;
+
             log_debug(
-                "TCP connection remote peer is sending getblocks too fast (" <<
-                (std::time(0) - time_last_getblocks_received_) <<
-                "), rate limiting."
+                "TCP connection getblocks " <<
+                (index ? index->height() : -1) << " to " <<
+                msg.protocol_getblocks().hash_stop.to_string(
+                ).substr(0, 20) << " limit " << limit << "."
             );
             
             /**
-             * Set the last time we got a getblocks.
+             * The block hashes to send.
              */
-            time_last_getblocks_received_ = std::time(0);
+            std::vector<sha256> block_hashes;
+            
+            for (; index; index = index->block_index_next())
+            {
+                if (
+                    index->get_block_hash() ==
+                    msg.protocol_getblocks().hash_stop
+                    )
+                {
+                    log_debug(
+                        "TCP connection getblocks stopping at " <<
+                        index->height() << " " <<
+                        index->get_block_hash().to_string().substr(0, 20)
+                        << "."
+                    );
+                    
+                    /**
+                     * Tell the downloading node about the latest block if
+                     * it's without risk of being rejected due to stake
+                     * connection check (ppcoin).
+                     */
+                    if (
+                        msg.protocol_getblocks().hash_stop !=
+                        globals::instance().hash_best_chain() &&
+                        index->time() + constants::min_stake_age >
+                        stack_impl::get_block_index_best()->time()
+                        )
+                    {
+                        /**
+                         * Insert the block hash.
+                         */
+                        block_hashes.push_back(
+                            globals::instance().hash_best_chain()
+                        );
+                    }
+                    
+                    break;
+                }
+                
+                /**
+                 * Insert the block hash.
+                 */
+                block_hashes.push_back(index->get_block_hash());
+                
+                if (--limit <= 0)
+                {
+                    /**
+                     * When this block is requested, we'll send an inv
+                     * that'll make them getblocks the next batch of
+                     * inventory.
+                     */
+                    log_debug(
+                        "TCP connection getblocks stopping at limit " <<
+                        index->height() << " " <<
+                        index->get_block_hash().to_string().substr(
+                        0, 20) << "."
+                    );
+
+                    /**
+                     * Set the hash continue.
+                     */
+                    m_hash_continue = index->get_block_hash();
+                    
+                    break;
+                }
+            }
+
+            if (block_hashes.size() > 0)
+            {
+                /**
+                 * Send an inv message with the block hashes.
+                 */
+                do_send_inv_message(
+                    inventory_vector::type_msg_block, block_hashes
+                );
+            }
         }
         else
         {
-            /**
-             * Set the last time we got a getblocks.
-             */
-            time_last_getblocks_received_ = std::time(0);
-            
-            /**
-             * If we are a peer with an up-to-date blockchain handle the
-             * getblocks message.
-             */
-            if (
-                utility::is_initial_block_download() == false &&
-                globals::instance().operation_mode() ==
-                protocol::operation_mode_peer
-                )
-            {
-                /**
-                 * Find the last block the sender has in the main chain.
-                 */
-                auto index = block_locator(
-                    msg.protocol_getblocks().hashes
-                ).get_block_index();
-                
-                /**
-                 * Send the rest of the chain.
-                 */
-                if (index)
-                {
-                    index = index->block_index_next();
-                }
-                
-                /**
-                 * We send 500 block hashes.
-                 */
-                enum { default_blocks = 500 };
-                
-                /**
-                 * The limit on the number of blocks to send.
-                 */
-                std::int16_t limit = default_blocks;
-
-                log_debug(
-                    "TCP connection getblocks " <<
-                    (index ? index->height() : -1) << " to " <<
-                    msg.protocol_getblocks().hash_stop.to_string(
-                    ).substr(0, 20) << " limit " << limit << "."
-                );
-                
-                /**
-                 * The block hashes to send.
-                 */
-                std::vector<sha256> block_hashes;
-                
-                for (; index; index = index->block_index_next())
-                {
-                    if (
-                        index->get_block_hash() ==
-                        msg.protocol_getblocks().hash_stop
-                        )
-                    {
-                        log_debug(
-                            "TCP connection getblocks stopping at " <<
-                            index->height() << " " <<
-                            index->get_block_hash().to_string().substr(0, 20)
-                            << "."
-                        );
-                        
-                        /**
-                         * Tell the downloading node about the latest block if
-                         * it's without risk of being rejected due to stake
-                         * connection check (ppcoin).
-                         */
-                        if (
-                            msg.protocol_getblocks().hash_stop !=
-                            globals::instance().hash_best_chain() &&
-                            index->time() + constants::min_stake_age >
-                            stack_impl::get_block_index_best()->time()
-                            )
-                        {
-                            /**
-                             * Insert the block hash.
-                             */
-                            block_hashes.push_back(
-                                globals::instance().hash_best_chain()
-                            );
-                        }
-                        
-                        break;
-                    }
-                    
-                    /**
-                     * Insert the block hash.
-                     */
-                    block_hashes.push_back(index->get_block_hash());
-                    
-                    if (--limit <= 0)
-                    {
-                        /**
-                         * When this block is requested, we'll send an inv
-                         * that'll make them getblocks the next batch of
-                         * inventory.
-                         */
-                        log_debug(
-                            "TCP connection getblocks stopping at limit " <<
-                            index->height() << " " <<
-                            index->get_block_hash().to_string().substr(
-                            0, 20) << "."
-                        );
-
-                        /**
-                         * Set the hash continue.
-                         */
-                        m_hash_continue = index->get_block_hash();
-                        
-                        break;
-                    }
-                }
-
-                if (block_hashes.size() > 0)
-                {
-                    /**
-                     * Send an inv message with the block hashes.
-                     */
-                    send_inv_message(
-                        inventory_vector::type_msg_block, block_hashes
-                    );
-                }
-            }
-            else
-            {
-                log_debug(
-                    "TCP connection (operation mode client or initial download)"
-                    " is dropping getblocks message."
-                );
-            }
+            log_debug(
+                "TCP connection (operation mode client or initial download)"
+                " is dropping getblocks message."
+            );
         }
     }
     else if (msg.header().command == "checkpoint")
@@ -3252,7 +3939,7 @@ bool tcp_connection::handle_message(message & msg)
         
         const auto & locator = msg.protocol_getheaders().locator;
         
-        std::shared_ptr<block_index> index;
+        block_index * index = 0;
         
         if (locator && locator->is_null())
         {
@@ -3305,6 +3992,242 @@ bool tcp_connection::handle_message(message & msg)
          */
         send_headers_message(headers);
     }
+    else if (msg.header().command == "headers")
+    {
+        log_none("Got headers");
+        
+        /**
+         * Set the last time we got a headers.
+         */
+        time_last_headers_received_ = std::time(0);
+        
+        if (
+            globals::instance().operation_mode() ==
+            protocol::operation_mode_client &&
+            globals::instance().is_client_spv() == true
+            )
+        {
+            /**
+             * Cancel the (SPV) getheaders timeout timer.
+             */
+            timer_spv_getheader_timeout_.cancel();
+            
+            /**
+             * Make sure we have some headers.
+             */
+            if (msg.protocol_headers().headers.size() > 0)
+            {
+                /**
+                 * Get the time of the last block header.
+                 */
+                auto time_last_header = static_cast<std::time_t> (
+                    msg.protocol_headers().headers.back().header().timestamp)
+                ;
+                
+                log_none(
+                    "TCP connection got " <<
+                    msg.protocol_headers().headers.size() <<
+                    " headers, last time ago = " <<
+                    std::time(0) - time_last_header
+                );
+                
+                if (
+                    msg.protocol_headers().headers.size() >= 2000 ||
+                    time_last_header >=
+                    globals::instance().spv_time_wallet_created()
+                    )
+                {
+                    /**
+                     * Get the first block header.
+                     */
+                    auto hash_first =
+                        msg.protocol_headers().headers.front().get_hash()
+                    ;
+                    
+                    /**
+                     * Get the last block header.
+                     */
+                    auto hash_last =
+                        msg.protocol_headers().headers.back().get_hash()
+                    ;
+
+                    /**
+                     * After N time since wallet creation switch from
+                     * downloading headers to BIP-0037 merkleblock's for
+                     * the rest of the chain.
+                     */
+                    if (
+                        time_last_header >=
+                        globals::instance().spv_time_wallet_created() &&
+                        globals::instance().spv_use_getblocks() == false
+                        )
+                    {
+                        globals::instance().set_spv_use_getblocks(true);
+                        
+                        log_info(
+                            "TCP connection is switching to (SPV) getblocks."
+                        );
+                        
+                        log_info(
+                            time_last_header << ":" <<
+                            globals::instance().spv_time_wallet_created()
+                        );
+                    }
+
+                    if (globals::instance().spv_use_getblocks() == true)
+                    {
+                        /**
+                         * Set the first and last hash.
+                         */
+                        std::vector<sha256> hashes;
+                        
+                        hashes.push_back(hash_last);
+                        hashes.push_back(hash_first);
+                        
+                        /**
+                         * Allocate the block_locator with the last and
+                         * first hash.
+                         */
+                        block_locator locator(hashes);
+                        
+                        /**
+                         * Send the next getheaders message.
+                         */
+                        send_getblocks_message(sha256(), locator);
+                    }
+                    else
+                    {
+                        /**
+                         * Set the first and last hash.
+                         */
+                        std::vector<sha256> hashes;
+                        
+                        hashes.push_back(hash_last);
+                        hashes.push_back(hash_first);
+                        
+                        /**
+                         * Allocate the block_locator with the last and
+                         * first hash.
+                         */
+                        block_locator locator(hashes);
+                        
+                        /**
+                         * Send the next getheaders message.
+                         */
+                        send_getheaders_message(sha256(), locator);
+                    }
+                }
+                else
+                {
+                    /**
+                     * We expect at least 2000 headers, any less and we ignore
+                     * the message.
+                     */
+                }
+            }
+            else
+            {
+                /**
+                 * We expect at least 2000 headers, any less and we ignore the
+                 * message.
+                 */
+            }
+            
+            auto self(shared_from_this());
+            
+            for (auto & i : msg.protocol_headers().headers)
+            {
+                block_merkle merkle_block(i);
+                
+                if (merkle_block.is_valid_spv() == true)
+                {
+                    log_none(
+                        "TCP connection " << this << " got valid merkle_block, "
+                        "matches = " <<
+                        merkle_block.transactions_matched().size() << "."
+                    );
+                    
+                    /**
+                     * Only block_merkle's required matching received
+                     * transactions.
+                     */
+                    std::vector<transaction> transactions_received;
+
+                    auto self(shared_from_this());
+                    
+                    /**
+                     * Post the operation onto the boost::asio::io_service.
+                     */
+                    globals::instance().strand().dispatch(
+                        [this, self, merkle_block, transactions_received]()
+                    {
+                        /**
+                         * Callback
+                         */
+                        stack_impl_.on_spv_merkle_block(
+                            self, *const_cast<block_merkle *> (&merkle_block),
+                            transactions_received
+                        );
+                    });
+                }
+                else
+                {
+                    log_error(
+                        "TCP connection " << this << " got bad merkle "
+                        "block, dropping."
+                    );
+                }
+            }
+        }
+        else
+        {
+            /**
+             * Make sure we have some headers.
+             */
+            if (msg.protocol_headers().headers.size() > 0)
+            {
+                /**
+                 * Get the first block header.
+                 */
+                auto hash_first =
+                    msg.protocol_headers().headers.front().get_hash()
+                ;
+                
+                /**
+                 * Get the last block header.
+                 */
+                auto hash_last =
+                    msg.protocol_headers().headers.back().get_hash()
+                ;
+                
+                /**
+                 * Set the first and last hash.
+                 */
+                std::vector<sha256> hashes;
+                
+                hashes.push_back(hash_last);
+                hashes.push_back(hash_first);
+                
+                /**
+                 * Allocate the block_locator with the last and
+                 * first hash.
+                 */
+                block_locator locator(hashes);
+                
+                /**
+                 * Send the next getheaders message.
+                 */
+                send_getheaders_message(sha256(), locator);
+            }
+            else
+            {
+                /**
+                 * We expect at least 2000 headers, any less and we ignore the
+                 * message.
+                 */
+            }
+        }
+    }
     else if (msg.header().command == "tx")
     {
         log_debug("Got tx");
@@ -3313,156 +4236,242 @@ bool tcp_connection::handle_message(message & msg)
         
         if (tx)
         {
-            std::vector<sha256> queue_work;
-            std::vector<sha256> queue_erase;
-            
-            db_tx txdb("r");
-
             /**
-             * Allocate the inventory_vector.
+             * If we are an (SPV) client we handle transactions differently.
              */
-            inventory_vector inv(
-                inventory_vector::type_msg_tx, tx->get_hash()
-            );
-            
-            auto missing_inputs = false;
-            
-            /**
-             * Allocate the data_buffer.
-             */
-            data_buffer buffer;
-            
-            /**
-             * Encode the transaction.
-             */
-            tx->encode(buffer);
-            
-            if (tx->accept_to_transaction_pool(txdb, &missing_inputs).first)
+            if (globals::instance().is_client_spv() == true)
             {
-                /**
-                 * Inform the wallet_manager.
-                 */
-                wallet_manager::instance().sync_with_wallets(*tx, 0, true);
-
-                if (m_protocol_version_relay == false)
+                if (spv_block_merkle_current_)
                 {
-                    log_info("TCP connection is not relaying transaction.");
+                    spv_transactions_current_[tx->get_hash()] = *tx;
+                    
+                    if (
+                        spv_transactions_current_.size() ==
+                        spv_block_merkle_current_->transactions_matched().size()
+                        )
+                    {
+                        /**
+                         * Collect the transactions we've received that belong
+                         * to the current block.
+                         */
+                        std::vector<transaction> transactions_received;
+                    
+                        for (auto & i : spv_transactions_current_)
+                        {
+                            transactions_received.push_back(i.second);
+                        }
+                        
+                        /**
+                         * Inform the wallet_manager of each received
+                         * transaction.
+                         */
+                        for (auto & i : transactions_received)
+                        {
+                            wallet_manager::instance().sync_with_wallets(
+                                i, 0, true
+                            );
+                        }
+
+                        /**
+                         * Copy the merkle_block so it's lifetime survives the
+                         * post operation.
+                         */
+                        block_merkle merkle_block(*spv_block_merkle_current_);
+
+                        auto self(shared_from_this());
+                        
+                        /**
+                         * Post the operation onto the boost::asio::io_service.
+                         */
+                        globals::instance().strand().dispatch(
+                            [this, self, merkle_block, transactions_received]()
+                        {
+                            /**
+                             * Callback
+                             */
+                            stack_impl_.on_spv_merkle_block(
+                                self,
+                                *const_cast<block_merkle *> (&merkle_block),
+                                transactions_received
+                            );
+                        });
+                        
+                        spv_block_merkle_current_ = nullptr;
+                        spv_transactions_current_.clear();
+                    }
                 }
                 else
                 {
-                    /**
-                     * Relay the inv.
-                     */
-                    relay_inv(inv, buffer);
+                    wallet_manager::instance().sync_with_wallets(*tx, 0, true);
                 }
+                
+                /**
+                 * Allocate the inventory_vector.
+                 */
+                inventory_vector inv(
+                    inventory_vector::type_msg_tx, tx->get_hash()
+                );
 
-                queue_work.push_back(inv.hash());
-                queue_erase.push_back(inv.hash());
+                insert_inventory_vector_seen(inv);
+            }
+            else
+            {
+                /**
+                 * Allocate the inventory_vector.
+                 */
+                inventory_vector inv(
+                    inventory_vector::type_msg_tx, tx->get_hash()
+                );
 
                 /**
-                 * Recursively process any orphan transactions that depended on
-                 * this one.
+                 * Allocate the data_buffer.
                  */
-                for (auto i = 0; i < queue_work.size(); i++)
+                data_buffer buffer;
+                
+                /**
+                 * Encode the transaction.
+                 */
+                tx->encode(buffer);
+                
+                std::vector<sha256> queue_work;
+                std::vector<sha256> queue_erase;
+                
+                db_tx txdb("r");
+            
+                auto missing_inputs = false;
+                
+                if (
+                    tx->accept_to_transaction_pool(txdb, &missing_inputs).first
+                    )
                 {
-                    auto hash_previous = queue_work[i];
-
-                    auto it = globals::instance(
-                        ).orphan_transactions_by_previous()[
-                        hash_previous].begin()
-                    ;
-                    
-                    for (
-                        ;
-                        it != globals::instance(
-                        ).orphan_transactions_by_previous()[
-                        hash_previous].end();
-                        ++it
-                        )
+                    /**
+                     * Inform the wallet_manager.
+                     */
+                    wallet_manager::instance().sync_with_wallets(*tx, 0, true);
+            
+                    if (m_protocol_version_relay == false)
                     {
-                        data_buffer buffer2(
-                            it->second->data(), it->second->size()
+                        log_info(
+                            "TCP connection is not relaying transaction."
                         );
-                        
-                        transaction tx2;
-                        
-                        tx2.decode(buffer2);
-                        
-                        inventory_vector inv2(
-                            inventory_vector::type_msg_tx, tx2.get_hash()
-                        );
-                        
-                        bool missing_inputs2 = false;
+                    }
+                    else
+                    {
+                        /**
+                         * Relay the inv.
+                         */
+                        relay_inv(inv, buffer);
+                    }
+                    
+                    queue_work.push_back(inv.hash());
+                    queue_erase.push_back(inv.hash());
 
-                        if (
-                            tx2.accept_to_transaction_pool(txdb,
-                            &missing_inputs2).first
+                    /**
+                     * Recursively process any orphan transactions that
+                     * depended on this one.
+                     */
+                    for (auto i = 0; i < queue_work.size(); i++)
+                    {
+                        auto hash_previous = queue_work[i];
+
+                        auto it = globals::instance(
+                            ).orphan_transactions_by_previous()[
+                            hash_previous].begin()
+                        ;
+                        
+                        for (
+                            ;
+                            it != globals::instance(
+                            ).orphan_transactions_by_previous()[
+                            hash_previous].end();
+                            ++it
                             )
                         {
-                            log_debug(
-                                "TCP connection accepted orphan transaction " <<
-                                inv2.hash().to_string().substr(0, 10) << "."
-                            )
-                            /**
-                             * Inform the wallet_manager.
-                             */
-                            wallet_manager::instance().sync_with_wallets(
-                                tx2, 0, true
+                            data_buffer buffer2(
+                                it->second->data(), it->second->size()
                             );
+                            
+                            transaction tx2;
+                            
+                            tx2.decode(buffer2);
+                            
+                            inventory_vector inv2(
+                                inventory_vector::type_msg_tx, tx2.get_hash()
+                            );
+                            
+                            bool missing_inputs2 = false;
 
-                            if (m_protocol_version_relay == false)
+                            if (
+                                tx2.accept_to_transaction_pool(txdb,
+                                &missing_inputs2).first
+                                )
                             {
-                                log_info(
-                                    "TCP connection is not relaying "
-                                    "transaction to bip-0037 node."
+                                log_debug(
+                                    "TCP connection accepted orphan "
+                                    "transaction " << inv2.hash().to_string(
+                                    ).substr(0, 10) << "."
+                                )
+                                /**
+                                 * Inform the wallet_manager.
+                                 */
+                                wallet_manager::instance().sync_with_wallets(
+                                    tx2, 0, true
+                                );
+
+                                if (m_protocol_version_relay == false)
+                                {
+                                    log_info(
+                                        "TCP connection is not relaying "
+                                        "transaction to BIP-0037 node."
+                                    );
+                                }
+                                else
+                                {
+                                    relay_inv(inv2, buffer2);
+                                }
+                                
+                                queue_work.push_back(inv2.hash());
+                                queue_erase.push_back(inv2.hash());
+                            }
+                            else if (missing_inputs2 == false)
+                            {
+                                /**
+                                 * Invalid orphan.
+                                 */
+                                queue_erase.push_back(inv2.hash());
+                                
+                                log_debug(
+                                    "TCP connection removed invalid orphan "
+                                    "transaction " <<
+                                    inv2.hash().to_string().substr(0, 10) << "."
                                 );
                             }
-                            else
-                            {
-                                relay_inv(inv2, buffer2);
-                            }
-                            
-                            queue_work.push_back(inv2.hash());
-                            queue_erase.push_back(inv2.hash());
-                        }
-                        else if (missing_inputs2 == false)
-                        {
-                            /**
-                             * Invalid orphan.
-                             */
-                            queue_erase.push_back(inv2.hash());
-                            
-                            log_debug(
-                                "TCP connection removed invalid orphan "
-                                "transaction " <<
-                                inv2.hash().to_string().substr(0, 10) << "."
-                            );
                         }
                     }
-                }
 
-                for (auto & i : queue_erase)
-                {
-                    utility::erase_orphan_tx(i);
+                    for (auto & i : queue_erase)
+                    {
+                        utility::erase_orphan_tx(i);
+                    }
                 }
-            }
-            else if (missing_inputs)
-            {
-                utility::add_orphan_tx(buffer);
-
-                /**
-                 * Limit the size of the orphan transactions.
-                 */
-                auto evicted = utility::limit_orphan_tx_size(
-                    block::get_maximum_size_median220() / 100
-                );
-                
-                if (evicted > 0)
+                else if (missing_inputs)
                 {
-                    log_debug(
-                        "TCP connection orphans overflow, evicted = " <<
-                        evicted << "."
+                    utility::add_orphan_tx(buffer);
+
+                    /**
+                     * Limit the size of the orphan transactions.
+                     */
+                    auto evicted = utility::limit_orphan_tx_size(
+                        block::get_maximum_size_median220() / 100
                     );
+                    
+                    if (evicted > 0)
+                    {
+                        log_debug(
+                            "TCP connection orphans overflow, evicted = " <<
+                            evicted << "."
+                        );
+                    }
                 }
             }
         }
@@ -3471,9 +4480,10 @@ bool tcp_connection::handle_message(message & msg)
     {
         if (msg.protocol_block().blk)
         {
-            log_none(
+            log_debug(
                 "Connection received block " <<
-                msg.protocol_block().blk->get_hash().to_string().substr(0, 20)
+                msg.protocol_block().blk->get_hash().to_string(
+                ).substr(0, 20)
                 << "."
             );
 #if 0
@@ -3484,25 +4494,162 @@ bool tcp_connection::handle_message(message & msg)
              */
             time_last_block_received_ = std::time(0);
             
+            if (globals::instance().is_client_spv() == false)
+            {
+                /**
+                 * Allocate an inventory_vector.
+                 */
+                inventory_vector inv(
+                    inventory_vector::type_msg_block,
+                    msg.protocol_block().blk->get_hash()
+                );
+                
+                insert_inventory_vector_seen(inv);
+                
+                /**
+                 * Get a shared pointer to the block so the post operation
+                 * will hold onto it.
+                 */
+                auto ptr_block = msg.protocol_block().blk;
+                
+                auto self(shared_from_this());
+                
+                /**
+                 * Post the operation onto the boost::asio::io_service.
+                 */
+                globals::instance().strand().dispatch(
+                    [this, self, ptr_block]()
+                {
+                    /**
+                     * Process the block.
+                     */
+                    if (
+                        stack_impl_.process_block(self, ptr_block)
+                        )
+                    {
+                        // ...
+                    }
+                });
+            }
+            else
+            {
+                block_merkle merkle_block(*msg.protocol_block().blk);
+                
+                std::vector<transaction> transactions_received;
+                
+                auto self(shared_from_this());
+                
+                /**
+                 * Post the operation onto the boost::asio::io_service.
+                 */
+                globals::instance().strand().dispatch(
+                    [this, self, merkle_block, transactions_received]()
+                {
+                    /**
+                     * Callback
+                     */
+                    stack_impl_.on_spv_merkle_block(
+                        self, *const_cast<block_merkle *> (&merkle_block),
+                        transactions_received
+                    );
+                });
+            }
+        }
+    }
+    else if (msg.header().command == "merkleblock")
+    {
+        assert(msg.protocol_merkleblock().merkleblock);
+        
+        if (msg.protocol_merkleblock().merkleblock)
+        {
+            log_none(
+                "Connection received merkleblock " <<
+                msg.protocol_merkleblock().merkleblock->get_hash().to_string(
+                ).substr(0, 20)
+                << "."
+            );
+            
             /**
              * Allocate an inventory_vector.
              */
             inventory_vector inv(
-                inventory_vector::type_msg_block,
-                msg.protocol_block().blk->get_hash()
+                inventory_vector::type_msg_filtered_block_nonstandard,
+                msg.protocol_merkleblock().merkleblock->get_hash()
             );
             
+            insert_inventory_vector_seen(inv);
+            
             /**
-             * Process the block.
+             * Cancel the (SPV) getblocks timeout timer.
              */
+            timer_spv_getblocks_timeout_.cancel();
+            
+            /**
+             * Set the time we received a block.
+             */
+            time_last_block_received_ = std::time(0);
+            
             if (
-                stack_impl_.process_block(
-                shared_from_this(), msg.protocol_block().blk)
+                msg.protocol_merkleblock().merkleblock->transactions_matched(
+                ).size() > 0
                 )
             {
                 /**
-                 * The inv as been fulfilled.
+                 * Set the current block_merkle (only if it has matched
+                 * transactions).
                  */
+                spv_block_merkle_current_.reset(new block_merkle(
+                    *msg.protocol_merkleblock().merkleblock)
+                );
+            }
+            else
+            {
+                block_merkle merkle_block(
+                    *msg.protocol_merkleblock().merkleblock
+                );
+                
+                /**
+                 * This block_merkle has no matching received transactions.
+                 */
+                std::vector<transaction> transactions_received;
+                
+                auto self(shared_from_this());
+                
+                /**
+                 * Post the operation onto the boost::asio::io_service.
+                 */
+                globals::instance().strand().dispatch(
+                    [this, self, merkle_block, transactions_received]()
+                {
+                    /**
+                     * Callback
+                     */
+                    stack_impl_.on_spv_merkle_block(
+                        self, *const_cast<block_merkle *> (&merkle_block),
+                        transactions_received
+                    );
+                });
+            }
+            
+            if (
+                msg.protocol_merkleblock().merkleblock->is_valid_spv() == true
+                )
+            {
+                /**
+                 * Copy the hashes of the matched transactions from the
+                 * merkle block.
+                 */
+                for (
+                    auto & i : msg.protocol_merkleblock(
+                    ).merkleblock->transactions_matched()
+                    )
+                {
+                    spv_transactions_matched_.insert(i.second);
+                }
+            }
+            else
+            {
+                log_error("TCP connection got invalid merkleblock message.");
             }
         }
     }
@@ -3603,10 +4750,26 @@ bool tcp_connection::handle_message(message & msg)
                      * Check that the transaction hash exists in the
                      * transaction pool before accepting a zerotime_lock.
                      */
-                    auto hash_not_found =
-                        transaction_pool::instance().transactions().count(
-                        ztlock->hash_tx()) == 0
-                    ;
+                    auto hash_not_found = true;
+                    
+                    /**
+                     * If we are an (SPV) client we do not use the
+                     * transaction_pool.
+                     */
+                    if (globals::instance().is_client_spv() == true)
+                    {
+                        hash_not_found =
+                            globals::instance().wallet_main()->transactions(
+                            ).count(ztlock->hash_tx()) == 0
+                        ;
+                    }
+                    else
+                    {
+                        hash_not_found =
+                            transaction_pool::instance().transactions().count(
+                            ztlock->hash_tx()) == 0
+                        ;
+                    }
 
                     if (hash_not_found)
                     {
@@ -3617,6 +4780,20 @@ bool tcp_connection::handle_message(message & msg)
                         );
                     }
                     else if (
+                        globals::instance().is_client_spv() == true &&
+                        globals::instance().wallet_main()->transactions()[
+                        ztlock->hash_tx()].time() >
+                        time::instance().get_adjusted()
+                        )
+                    {
+                        log_info(
+                            "TCP connection (SPV) got ZeroTime lock (arrived "
+                            "in a flying delorean), dropping " <<
+                            ztlock->hash_tx().to_string().substr(0, 8) << "."
+                        );
+                    }
+                    else if (
+                        globals::instance().is_client_spv() == false &&
                         transaction_pool::instance().transactions()[
                         ztlock->hash_tx()].time() >
                         time::instance().get_adjusted()
@@ -3655,19 +4832,25 @@ bool tcp_connection::handle_message(message & msg)
                         else
                         {
                             /**
-                             * Allocate the buffer for relaying.
+                             * (SPV) clients do not relay ZeroTime locks.
                              */
-                            data_buffer buffer;
-                        
-                            /**
-                             * Encode the zerotime_lock.
-                             */
-                            ztlock->encode(buffer);
+                            if (globals::instance().is_client_spv() == false)
+                            {
+                                /**
+                                 * Allocate the buffer for relaying.
+                                 */
+                                data_buffer buffer;
                             
-                            /**
-                             * Relay the inv.
-                             */
-                            relay_inv(inv, buffer);
+                                /**
+                                 * Encode the zerotime_lock.
+                                 */
+                                ztlock->encode(buffer);
+                                
+                                /**
+                                 * Relay the inv.
+                                 */
+                                relay_inv(inv, buffer);
+                            }
 
                             log_info(
                                 "TCP connection is adding ZeroTime lock " <<
@@ -3691,13 +4874,19 @@ bool tcp_connection::handle_message(message & msg)
                                     i.previous_out()] = ztlock->hash_tx()
                                 ;
                             }
-                            
+
                             /**
-                             * Vote for the ztlock.
+                             * (SPV) clients do not vote on ZeroTime locks.
                              */
-                            stack_impl_.get_zerotime_manager()->vote(
-                                ztlock->hash_tx(), ztlock->transactions_in()
-                            );
+                            if (globals::instance().is_client_spv() == false)
+                            {
+                                /**
+                                 * Vote for the ztlock.
+                                 */
+                                stack_impl_.get_zerotime_manager()->vote(
+                                    ztlock->hash_tx(), ztlock->transactions_in()
+                                );
+                            }
                         }
                     }
                 }
@@ -3864,19 +5053,25 @@ bool tcp_connection::handle_message(message & msg)
                     }
 
                     /**
-                     * Allocate the data_buffer.
+                     * (SPV) clients do not relay ztvote's.
                      */
-                    data_buffer buffer;
-                    
-                    /**
-                     * Encode the transaction (reuse the signature).
-                     */
-                    ztvote->encode(buffer, true);
-            
-                    /**
-                     * Relay the ztvote.
-                     */
-                    relay_inv(inv, buffer);
+                    if (globals::instance().is_client_spv() == false)
+                    {
+                        /**
+                         * Allocate the data_buffer.
+                         */
+                        data_buffer buffer;
+                        
+                        /**
+                         * Encode the transaction (reuse the signature).
+                         */
+                        ztvote->encode(buffer, true);
+                
+                        /**
+                         * Relay the ztvote.
+                         */
+                        relay_inv(inv, buffer);
+                    }
                 }
             }
         }
@@ -4036,6 +5231,95 @@ bool tcp_connection::handle_message(message & msg)
             }
         }
     }
+    else if (msg.header().command == "isync")
+    {
+        log_info("TCP connection got isync.");
+        
+        if (
+            globals::instance().is_incentive_enabled() == true &&
+            incentive::instance().get_key().is_null() == false
+            )
+        {
+            if (utility::is_initial_block_download() == false)
+            {
+                const auto & isync = msg.protocol_isync().isync;
+                
+                if (isync)
+                {
+                    /**
+                     * Get some icols.
+                     */
+                    auto icols =
+                        stack_impl_.get_incentive_manager(
+                        )->get_incentive_collaterals(isync->filter())
+                    ;
+                    
+                    /**
+                     * Send the icols message.
+                     */
+                    send_icols_message(*icols);
+                }
+            }
+        }
+    }
+    else if (msg.header().command == "icols")
+    {
+        log_info("TCP connection got icols.");
+
+        /**
+         * If we did not send an isync message consider it unsolicited SPAM and
+         * drop them.
+         */
+        if (did_send_isync_ == true)
+        {
+            /**
+             * Ignore icols if they did not originate from a peer.
+             */
+            if (
+                (m_protocol_version_services &
+                protocol::operation_mode_peer) == 1
+                )
+            {
+                if (
+                    globals::instance().is_incentive_enabled() == true &&
+                    incentive::instance().get_key().is_null() == false
+                    )
+                {
+                    if (utility::is_initial_block_download() == false)
+                    {
+                        const auto & icols = msg.protocol_icols().icols;
+                        
+                        if (icols)
+                        {
+                            log_info(
+                                "TCP connection got " <<
+                                icols->collaterals().size() << " icols."
+                            );
+                            
+                            if (auto transport = m_tcp_transport.lock())
+                            {
+                                /**
+                                 * Inform the incentive_manager.
+                                 */
+                                stack_impl_.get_incentive_manager(
+                                    )->handle_message(transport->socket(
+                                    ).remote_endpoint(), msg
+                                );
+
+                                /**
+                                 * Inform the address_manager.
+                                 */
+                                stack_impl_.get_address_manager(
+                                    )->handle_message(transport->socket(
+                                    ).remote_endpoint(), msg
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
     else if (msg.header().command == "cbbroadcast")
     {
         log_info("TCP connection got cbbroadcast.");
@@ -4092,7 +5376,7 @@ bool tcp_connection::handle_message(message & msg)
                                          * Send the cbbroadcast message.
                                          */
                                         j->send_cbbroadcast_message(
-                                            *cbbroadcast
+                                            cbbroadcast
                                         );
                                         
                                         log_info(
@@ -4472,7 +5756,7 @@ bool tcp_connection::handle_message(message & msg)
         
             if (block_hashes_filtered.size() > 0)
             {
-                send_inv_message(
+                do_send_inv_message(
                     inventory_vector::type_msg_tx, block_hashes_filtered
                 );
             }
@@ -4486,7 +5770,9 @@ bool tcp_connection::handle_message(message & msg)
         
             if (block_hashes.size() > 0)
             {
-                send_inv_message(inventory_vector::type_msg_tx, block_hashes);
+                do_send_inv_message(
+                    inventory_vector::type_msg_tx, block_hashes
+                );
             }
         }
     }
@@ -4564,7 +5850,7 @@ void tcp_connection::do_ping(const boost::system::error_code & ec)
             std::chrono::seconds(60)
         );
         timer_ping_timeout_.async_wait(
-            globals::instance().strand().wrap(
+            strand_.wrap(
                 [this, self](boost::system::error_code ec)
                 {
                     if (ec)
@@ -4592,7 +5878,7 @@ void tcp_connection::do_ping(const boost::system::error_code & ec)
         send_ping_message();
         
         timer_ping_.expires_from_now(std::chrono::seconds(interval_ping));
-        timer_ping_.async_wait(globals::instance().strand().wrap(
+        timer_ping_.async_wait(strand_.wrap(
             std::bind(&tcp_connection::do_ping, self,
             std::placeholders::_1))
         );
@@ -4636,26 +5922,123 @@ void tcp_connection::do_send_getblocks(const boost::system::error_code & ec)
              * Call stop.
              */
             stop();
+            
+            return;
         }
         else
         {
-            /**
-             * If we have not received a block in a while or we know we need to
-             * then send a getblocks message.
-             */
-            if (
-                std::time(0) - time_last_block_received_ >=
-                (constants::work_and_stake_target_spacing * 2) ||
-                (utility::is_initial_block_download() &&
-                std::time(0) - time_last_block_received_ > 3)
-                )
+            if (globals::instance().is_client_spv() == true)
             {
-                /**
-                 * Send a getblocks message with our best index.
-                 */
-                send_getblocks_message(
-                    stack_impl::get_block_index_best(), sha256()
-                );
+                auto should_send_spv_getblocks =
+                    globals::instance().spv_use_getblocks() == true
+                ;
+                
+                if (
+                    should_send_spv_getblocks &&
+                    m_identifier == globals::instance(
+                    ).spv_active_tcp_connection_identifier())
+                {
+                    should_send_spv_getblocks = true;
+                }
+
+                if (should_send_spv_getblocks == true)
+                {
+                    if (
+                        m_identifier == globals::instance(
+                        ).spv_active_tcp_connection_identifier() &&
+                        globals::instance().spv_best_block_height() <
+                        stack_impl_.peer_block_count() &&
+                        std::time(0) - time_last_block_received_ >= 60
+                        )
+                    {
+                        log_info(
+                            "TCP connection " << m_identifier <<
+                            " (SPV) getblocks stalled, calling stop."
+                        );
+                        
+                        /**
+                         * We've stalled.
+                         */
+                        stop();
+                        
+                        return;
+                    }
+                    else if (
+                        std::time(0) - time_last_block_received_ >=
+                        (constants::work_and_stake_target_spacing * 2) ||
+                        (utility::is_spv_initial_block_download() &&
+                        std::time(0) - time_last_block_received_ > 8)
+                        )
+                    {
+                        if (globals::instance().spv_use_getblocks() == true)
+                        {
+                            /**
+                             * Get the block_locator hashes.
+                             */
+                            const auto & block_locator_hashes =
+                                globals::instance().spv_block_locator_hashes()
+                            ;
+                            
+                            /**
+                             * Allocate the block_locator with the last and
+                             * first hash.
+                             */
+                            block_locator locator(block_locator_hashes);
+                            
+                            /**
+                             * Send the getblocks message.
+                             */
+                            send_getblocks_message(sha256(), locator);
+                        }
+                    }
+                }
+            }
+            else
+            {
+                if (
+                    utility::is_initial_block_download() == true &&
+                    (std::time(0) - time_last_block_received_ >=
+                    constants::work_and_stake_target_spacing * 3)
+                    )
+                {
+                    log_info(
+                        "TCP connection " << m_identifier <<
+                        " chain sync stalled, calling stop."
+                    );
+                    
+                    /**
+                     * We've stalled.
+                     */
+                    stop();
+                    
+                    return;
+                }
+                else if (
+                    (std::time(0) - time_last_block_received_ >=
+                    (constants::work_and_stake_target_spacing * 2)) ||
+                    (utility::is_initial_block_download() == true &&
+                    std::time(0) - time_last_block_received_ >=
+                    constants::work_and_stake_target_spacing * 3)
+                    )
+                {
+                    if (
+                        std::time(0) - time_last_getblocks_sent_ >=
+                        constants::work_and_stake_target_spacing * 3
+                        )
+                    {
+                        log_info(
+                            "TCP connection " << m_identifier << " is sending "
+                            "getblocks."
+                        );
+
+                        /**
+                         * Send a getblocks message with our best index.
+                         */
+                        send_getblocks_message(
+                            stack_impl::get_block_index_best(), sha256()
+                        );
+                    }
+                }
             }
             
             auto self(shared_from_this());
@@ -4663,8 +6046,16 @@ void tcp_connection::do_send_getblocks(const boost::system::error_code & ec)
             /**
              * Start the getblocks timer.
              */
-            timer_getblocks_.expires_from_now(std::chrono::seconds(8));
-            timer_getblocks_.async_wait(globals::instance().strand().wrap(
+            if (globals::instance().is_client_spv() == true)
+            {
+                timer_getblocks_.expires_from_now(std::chrono::seconds(8));
+            }
+            else
+            {
+                timer_getblocks_.expires_from_now(std::chrono::seconds(8));
+            }
+            
+            timer_getblocks_.async_wait(strand_.wrap(
                 std::bind(&tcp_connection::do_send_getblocks, self,
                 std::placeholders::_1))
             );
@@ -4672,6 +6063,282 @@ void tcp_connection::do_send_getblocks(const boost::system::error_code & ec)
     }
 }
 
+void tcp_connection::do_send_inv_message(
+    const inventory_vector::type_t & type, const sha256 & hash_block
+    )
+{
+    if (auto t = m_tcp_transport.lock())
+    {
+        inventory_vector inv(type, hash_block);
+        
+        /**
+         * Prevent sending duplicate INV's.
+         */
+        if (inventory_vectors_seen_set_.count(inv) > 0)
+        {
+            log_info(
+                "Already sent INV " << hash_block.to_string().substr(0, 16)
+            );
+            
+            return;
+        }
+        
+        /**
+         * Allocate the message.
+         */
+        message msg("inv");
+        
+        /**
+         * Set the inventory_vector.
+         */
+        msg.protocol_inv().inventory.push_back(inv);
+        
+        /**
+         * Set the count.
+         */
+        msg.protocol_inv().count = msg.protocol_inv().inventory.size();
+        
+        log_none("TCP connection is sending inv.");
+        
+        /**
+         * Encode the message.
+         */
+        msg.encode();
+        
+        /**
+         * Write the message.
+         */
+        t->write(msg.data(), msg.size());
+    }
+    else
+    {
+        stop();
+    }
+}
+
+void tcp_connection::do_send_inv_message(
+    const inventory_vector::type_t & type,
+    const std::vector<sha256> & block_hashes
+    )
+{
+    if (auto t = m_tcp_transport.lock())
+    {
+        /**
+         * Allocate the message.
+         */
+        message msg("inv");
+        
+        for (auto & i : block_hashes)
+        {
+            inventory_vector inv(type, i);
+
+            if (inventory_vectors_seen_set_.count(inv) > 0)
+            {
+                log_info(
+                    "Already sent INV " << i.to_string().substr(0, 16) <<
+                    ", continuing."
+                );
+                
+                continue;
+            }
+            /**
+             * Append the inventory_vector.
+             */
+            msg.protocol_inv().inventory.push_back(inv);
+        }
+        
+        /**
+         * Set the count.
+         */
+        msg.protocol_inv().count = msg.protocol_inv().inventory.size();
+        
+        log_none(
+            "TCP connection is sending inv, count = " <<
+            msg.protocol_inv().count << "."
+        );
+        
+        /**
+         * Encode the message.
+         */
+        msg.encode();
+        
+        /**
+         * Write the message.
+         */
+        t->write(msg.data(), msg.size());
+    }
+    else
+    {
+        stop();
+    }
+}
+
+void tcp_connection::do_send_relayed_inv_message(
+    const inventory_vector & inv, const data_buffer & buffer
+    )
+{
+    std::lock_guard<std::recursive_mutex> l1(stack_impl::mutex());
+    
+    /**
+     * Expire old relay messages.
+     */
+    while (
+        globals::instance().relay_inv_expirations().size() > 0 &&
+        globals::instance().relay_inv_expirations().front().first < std::time(0)
+        )
+    {
+        globals::instance().relay_invs().erase(
+            globals::instance().relay_inv_expirations().front().second
+        );
+        
+        globals::instance().relay_inv_expirations().pop_front();
+    }
+
+    /**
+     * Save original serialized message so newer versions are preserved.
+     */
+    globals::instance().relay_invs().insert(std::make_pair(inv, buffer));
+    
+    globals::instance().relay_inv_expirations().push_back(
+        std::make_pair(std::time(0) + 15 * 60, inv)
+    );
+    
+    if (auto t = m_tcp_transport.lock())
+    {
+        /**
+         * Allocate the message.
+         */
+        message msg(inv.command(), buffer);
+
+        /**
+         * Encode the message.
+         */
+        msg.encode();
+
+        log_debug(
+            "TCP connection is sending (relayed) inv message, command = " <<
+            inv.command() << ", buffer size = " << buffer.size() << "."
+        );
+    
+        /**
+         * Write the message.
+         */
+        t->write(msg.data(), msg.size());
+    }
+    else
+    {
+        stop();
+    }
+}
+
+void tcp_connection::do_send_block_message(const block & blk)
+{
+    if (auto t = m_tcp_transport.lock())
+    {
+        /**
+         * Allocate the message.
+         */
+        message msg("block");
+        
+        /**
+         * Set the block.
+         */
+        msg.protocol_block().blk = std::make_shared<block> (blk);
+        
+        log_none(
+            "TCP connection is sending block " <<
+            msg.protocol_block().blk->get_hash().to_string().substr(0, 20) <<
+            "."
+        );
+        
+        /**
+         * Encode the message.
+         */
+        msg.encode();
+        
+        /**
+         * Write the message.
+         */
+        t->write(msg.data(), msg.size());
+    }
+    else
+    {
+        stop();
+    }
+}
+
+void tcp_connection::do_send_getheaders(const boost::system::error_code & ec)
+{
+    if (ec)
+    {
+        // ...
+    }
+    else
+    {
+        /**
+         * The block spacing must be more than 63 seconds.
+         */
+        assert(constants::work_and_stake_target_spacing > 63);
+
+        std::lock_guard<std::recursive_mutex> l1(stack_impl::mutex());
+        
+        if (
+            globals::instance().is_client_spv() == true &&
+            globals::instance().spv_use_getblocks() == false
+            )
+        {
+            if (
+                m_identifier == globals::instance(
+                ).spv_active_tcp_connection_identifier()
+                )
+            {
+                if (
+                    std::time(0) - time_last_headers_received_ >=
+                    (constants::work_and_stake_target_spacing * 2) ||
+                    (utility::is_spv_initial_block_download() &&
+                    std::time(0) - time_last_headers_received_ > 3)
+                    )
+                {
+                    /**
+                     * Get the block_locator hashes.
+                     */
+                    const auto & block_locator_hashes =
+                        globals::instance().spv_block_locator_hashes()
+                    ;
+                    
+                    /**
+                     * Allocate the block_locator with the last and
+                     * first hash.
+                     */
+                    block_locator locator(block_locator_hashes);
+                    
+                    /**
+                     * Send the getheaders message.
+                     */
+                    send_getheaders_message(sha256(), locator);
+                }
+            }
+            
+            /**
+             * After initial download of the headers SPV clients use getblocks
+             * to continue synchronisation.
+             */
+            if (utility::is_spv_initial_block_download() == true)
+            {
+                auto self(shared_from_this());
+                
+                /**
+                 * Start the getheaders timer.
+                 */
+                timer_getheaders_.expires_from_now(std::chrono::seconds(8));
+                timer_getheaders_.async_wait(strand_.wrap(
+                    std::bind(&tcp_connection::do_send_getheaders, self,
+                    std::placeholders::_1))
+                );
+            }
+        }
+    }
+}
 
 void tcp_connection::do_rebroadcast_addr_messages(
     const std::uint32_t & interval
@@ -4683,7 +6350,7 @@ void tcp_connection::do_rebroadcast_addr_messages(
      * Start the addr rebroadcast timer.
      */
     timer_addr_rebroadcast_.expires_from_now(std::chrono::seconds(interval));
-    timer_addr_rebroadcast_.async_wait(globals::instance().strand().wrap(
+    timer_addr_rebroadcast_.async_wait(strand_.wrap(
         [this, self] (const boost::system::error_code & ec)
         {
             if (ec)
@@ -4699,6 +6366,10 @@ void tcp_connection::do_rebroadcast_addr_messages(
                     (std::time(0) - g_last_addr_rebroadcast > 8 * 60 * 60)
                     )
                 {
+                    std::lock_guard<std::recursive_mutex> l1(
+                        stack_impl::mutex()
+                    );
+                    
                     auto tcp_connections =
                         stack_impl_.get_tcp_connection_manager(
                         )->tcp_connections()
@@ -4714,16 +6385,17 @@ void tcp_connection::do_rebroadcast_addr_messages(
                                  * Periodically clear the seen network
                                  * addresses to allow for new rebroadcasts.
                                  */
-                                t->seen_network_addresses().clear();
+                                t->clear_seen_network_addresses();
 
                                 /**
                                  * Get our network port.
                                  */
                                 auto port =
-                                    stack_impl_.get_tcp_acceptor(
+                                    globals::instance().is_client_spv(
+                                    ) == true ? 0 :stack_impl_.get_tcp_acceptor(
                                     )->local_endpoint().port()
                                 ;
-                                
+
                                 protocol::network_address_t addr =
                                     protocol::network_address_t::from_endpoint(
                                     boost::asio::ip::tcp::endpoint(
@@ -4753,10 +6425,10 @@ void tcp_connection::do_send_cbstatus(const std::uint32_t & interval)
     auto self(shared_from_this());
     
     /**
-     * Start the addr rebroadcast timer.
+     * Start the cbstatus timer.
      */
     timer_cbstatus_.expires_from_now(std::chrono::seconds(interval));
-    timer_cbstatus_.async_wait(globals::instance().strand().wrap(
+    timer_cbstatus_.async_wait(strand_.wrap(
         [this, self] (const boost::system::error_code & ec)
         {
             if (ec)
@@ -4883,4 +6555,103 @@ void tcp_connection::do_send_cbstatus(const std::uint32_t & interval)
             do_send_cbstatus(2);
         })
     );
+}
+
+void tcp_connection::do_send_isync(const std::uint32_t & interval)
+{
+    auto self(shared_from_this());
+    
+    /**
+     * Start the isync timer.
+     */
+    timer_isync_.expires_from_now(std::chrono::seconds(interval));
+    timer_isync_.async_wait(strand_.wrap(
+        [this, self] (const boost::system::error_code & ec)
+    {
+        if (ec)
+        {
+            // ...
+        }
+        else
+        {
+            if (
+                utility::is_initial_block_download() == false &&
+                globals::instance().is_incentive_enabled() == true
+                )
+            {
+                static auto g_isync_sent = 0;
+                static auto g_isync_time_last_sent = std::time(0);
+                
+                auto should_send_isync = false;
+                
+                /**
+                 * Only send an isync message 8 times every 3 hours or
+                 * on initial connection up to 8 times.
+                 */
+                if (std::time(0) - g_isync_time_last_sent >= 3 * 60 * 60)
+                {
+                    did_send_isync_ = false;
+                    
+                    g_isync_sent = 0;
+                    
+                    should_send_isync = true;
+                }
+                else if (g_isync_sent < 8 && did_send_isync_ == false)
+                {
+                    should_send_isync = true;
+                }
+                
+                if (should_send_isync == true)
+                {
+                    did_send_isync_ = true;
+                    
+                    g_isync_sent++;
+
+                    log_info(
+                        "TCP connection " << m_identifier << " is sending "
+                        "isync message, globally sent = " << g_isync_sent << "."
+                    );
+                    
+                    g_isync_time_last_sent = std::time(0);
+                    
+                    send_isync_message();
+                }
+                
+                /**
+                 * Double the interval each time.
+                 */
+                do_send_isync(g_isync_sent * 2);
+            }
+            else
+            {
+                do_send_isync(8);
+            }
+        }
+    }));
+}
+
+bool tcp_connection::insert_inventory_vector_seen(const inventory_vector & inv)
+{
+    auto ret = inventory_vectors_seen_set_.insert(inv);
+    
+    enum { inv_queue_max_len = 1024 };
+    
+    if (ret.second == true)
+    {
+        if (
+            inv_queue_max_len &&
+            inventory_vectors_seen_queue_.size() == inv_queue_max_len
+            )
+        {
+            inventory_vectors_seen_set_.erase(
+                inventory_vectors_seen_queue_.front()
+            );
+            
+            inventory_vectors_seen_queue_.pop_front();
+        }
+        
+        inventory_vectors_seen_queue_.push_back(inv);
+    }
+    
+    return ret.second;
 }

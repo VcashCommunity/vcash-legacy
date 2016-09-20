@@ -1,9 +1,9 @@
 /*
  * Copyright (c) 2013-2016 John Connor (BM-NC49AxAjcqVcF5jNPu85Rb8MJ2d9JqZt)
  *
- * This file is part of vanillacoin.
+ * This file is part of vcash.
  *
- * vanillacoin is free software: you can redistribute it and/or modify
+ * vcash is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License with
  * additional permissions to the one published by the Free Software
  * Foundation, either version 3 of the License, or (at your option)
@@ -303,7 +303,7 @@ std::string filesystem::home_path()
 {
     std::string ret;
 #if (defined __ANDROID__)
-    std::string bundle_id = "net.vanillacoin.vanillacoin";
+    std::string bundle_id = "net.vcash.vcash";
     ret = "/data/data/" + bundle_id;
 #else
     if (std::getenv("HOME"))

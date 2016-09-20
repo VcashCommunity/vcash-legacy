@@ -1,9 +1,9 @@
 /*
  * Copyright (c) 2013-2016 John Connor (BM-NC49AxAjcqVcF5jNPu85Rb8MJ2d9JqZt)
  *
- * This file is part of vanillacoin.
+ * This file is part of vcash.
  *
- * vanillacoin is free software: you can redistribute it and/or modify
+ * vcash is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License with
  * additional permissions to the one published by the Free Software
  * Foundation, either version 3 of the License, or (at your option)
@@ -39,6 +39,7 @@
 #include <coin/alert_manager.hpp>
 #include <coin/block.hpp>
 #include <coin/block_index.hpp>
+#include <coin/block_merkle.hpp>
 #include <coin/chainblender.hpp>
 #include <coin/chainblender_manager.hpp>
 #include <coin/checkpoint_sync.hpp>
@@ -58,6 +59,7 @@
 #include <coin/random.hpp>
 #include <coin/rpc_json_parser.hpp>
 #include <coin/rpc_manager.hpp>
+#include <coin/script_checker_queue.hpp>
 #include <coin/stack.hpp>
 #include <coin/stack_impl.hpp>
 #include <coin/status_manager.hpp>
@@ -72,25 +74,49 @@
 
 using namespace coin;
 
+/**
+ * The main std::recursive_mutex.
+ */
+std::recursive_mutex stack_impl::g_mutex;
+
 std::shared_ptr<db_env> stack_impl::g_db_env;
-std::shared_ptr<block_index> stack_impl::g_block_index_genesis;
+block_index * stack_impl::g_block_index_genesis = 0;
 std::set< std::pair<point_out, std::uint32_t> > stack_impl::g_seen_stake;
-std::shared_ptr<block_index> stack_impl::g_block_index_best;
+block_index * stack_impl::g_block_index_best = 0;
 big_number stack_impl::g_best_chain_trust(0);
 big_number stack_impl::g_best_invalid_trust;
 
 stack_impl::stack_impl(coin::stack & owner)
     : stack_(owner)
-    , timer_wallet_flush_(globals::instance().io_service())
     , timer_status_block_(globals::instance().io_service())
     , timer_status_wallet_(globals::instance().io_service())
     , timer_status_blockchain_(globals::instance().io_service())
+    , timer_database_env_(globals::instance().io_service())
+    , timer_block_merkles_save_(globals::instance().io_service())
 {
     // ...
 }
 
 void stack_impl::start()
 {
+    if (
+        m_configuration.args().count("mode") > 0 &&
+        m_configuration.args()["mode"] == "spv"
+        )
+    {
+        /**
+         * Set that we are a client node.
+         */
+        globals::instance().set_operation_mode(
+            coin::protocol::operation_mode_client
+        );
+        
+        /**
+         * Set that we are operating in (SPV) client mode.
+         */
+        globals::instance().set_client_spv(true);
+    }
+
     try
     {
         create_directories();
@@ -140,7 +166,7 @@ void stack_impl::start()
     {
         log_info("Stack loaded configuration from disk.");
     }
-    
+
     /**
      * @note Do not enable.
      */
@@ -253,9 +279,25 @@ void stack_impl::start()
     m_status_manager->insert(status);
     
     /**
+     * Get the database cache size.
+     */
+    auto database_cache_size = m_configuration.database_cache_size();
+    
+    /**
+     * If we are an (SPV) client we only need 1 Megabyte of cache.
+     */
+    if (globals::instance().is_client_spv() == true)
+    {
+        if (database_cache_size > 1)
+        {
+            database_cache_size = 1;
+        }
+    }
+    
+    /**
      * Open the db_env.
      */
-    if (g_db_env->open(m_configuration.database_cache_size()))
+    if (g_db_env->open(database_cache_size))
     {
         log_info("Stack is loading block index...");
         
@@ -278,7 +320,76 @@ void stack_impl::start()
          * Callback
          */
         m_status_manager->insert(status);
-    
+        
+        if (globals::instance().is_client_spv() == true)
+        {
+            globals::instance().io_service().post(
+                globals::instance().strand().wrap(
+                [this]()
+            {
+                std::uint8_t trys = 0;
+                
+                /**
+                 * Load the block merkles from disk.
+                 */
+                spv_block_merkles_load(trys);
+                
+                if (trys > 1)
+                {
+                    log_info(
+                        "Stack found no valid (SPV) chain files, "
+                        "syncing from genesis."
+                    );
+                }
+                
+                /**
+                 * If we are an SPV client set the last block received to that
+                 * of the genesis block if we do not yet have any merkle blocks.
+                 */
+                if (globals::instance().spv_block_merkles().size() == 0)
+                {
+                    auto hash_genesis =
+                        (constants::test_net ?
+                        block::get_hash_genesis_test_net() :
+                        block::get_hash_genesis())
+                    ;
+                    
+                    globals::instance().spv_block_merkles()[hash_genesis].reset(
+                        new block_merkle(block::create_genesis()))
+                    ;
+                    
+                    globals::instance().set_spv_block_last(
+                        *globals::instance().spv_block_merkles()[hash_genesis]
+                    );
+                }
+                
+                /**
+                 * Starts the block_merkle's save timer.
+                 */
+                timer_block_merkles_save_.expires_from_now(
+                    std::chrono::seconds(60 * 60)
+                );
+                timer_block_merkles_save_.async_wait(
+                    globals::instance().strand().wrap(
+                        [this](boost::system::error_code ec)
+                        {
+                            if (ec)
+                            {
+                                // ...
+                            }
+                            else
+                            {
+                                /**
+                                 * Save the (SPV) block_merkle's to disk.
+                                 */
+                                spv_block_merkles_save();
+                            }
+                        }
+                    )
+                );
+            }));
+        }
+        
         /**
          * Load the block index.
          */
@@ -519,7 +630,12 @@ void stack_impl::start()
                     /**
                      * -upgradewallet
                      */
-             
+
+                    /**
+                     * :TODO: Use configuration and globals.
+                     */
+                    auto configuration_instance_wallet_hd = false;
+                    
                     /**
                      * If this is the first run we need to create a wallet.
                      */
@@ -529,7 +645,19 @@ void stack_impl::start()
 						 * Get the db_wallet.
 						 */
 						db_wallet wallet_db("wallet.dat");
-					
+
+                       /**
+                        * Set the creation timestamp (minus one day).
+                        */
+                        globals::instance().wallet_main()->set_timestamp(
+                            std::time(0)
+                        );
+
+                        /**
+                         * Write the creation timestamp.
+                         */
+                        wallet_db.write_timestamp(std::time(0));
+                        
 						/**
                          * Use the latest wallet features for new wallets.
                          */
@@ -542,6 +670,29 @@ void stack_impl::start()
                          */
                         std::srand(static_cast<std::uint32_t> (std::clock()));
 
+                        if (
+                            configuration_instance_wallet_hd &&
+                            globals::instance().wallet_main(
+                            )->get_hd_configuration().id_key_master(
+                            ).is_empty() == true
+                            )
+                        {
+                            key k;
+                            
+                            k.make_new_key(true);
+                            
+                            if (
+                                globals::instance().wallet_main(
+                                )->set_hd_key_master(k) == false
+                                )
+                            {
+                                throw std::runtime_error(
+                                    "stack_impl::start(): Set key HD "
+                                    "master failed"
+                                );
+                            }
+                        }
+        
                         /**
                          * Allocate a new public key.
                          */
@@ -623,6 +774,85 @@ void stack_impl::start()
                             }));
                         }
                     }
+                    
+                    if (configuration_instance_wallet_hd == true)
+                    {
+                        if (
+                            globals::instance().wallet_main(
+                            )->get_hd_configuration().id_key_master(
+                            ).is_empty() == true
+                            )
+                        {
+                            log_warn(
+                                "Stack, normal wallets cannot be converted to "
+                                "hd wallets. To create an hd wallet you must "
+                                "first remove the normal wallet."
+                            );
+                            
+                            /**
+                             * Allocate the error.
+                             */
+                            std::map<std::string, std::string> error;
+                            
+                            /**
+                             * Set the error type.
+                             */
+                            error["type"] = "wallet";
+                            
+                            /**
+                             * Set the error value.
+                             */
+                            error["value"] =
+                                "Wallet failed to initialize, refer to log file"
+                            ;
+
+                            /**
+                             * Callback
+                             */
+                            on_error(error);
+
+                            exit(0);
+                        }
+                    }
+                    else
+                    {
+                        if (
+                            globals::instance().wallet_main(
+                            )->get_hd_configuration().id_key_master(
+                            ).is_empty() == false
+                            )
+                        {
+                            log_warn(
+                                "Stack, hd wallets cannot be converted to "
+                                "normal wallets. To create a normal wallet "
+                                "you must first remove the hd wallet."
+                            );
+                            
+                            /**
+                             * Allocate the error.
+                             */
+                            std::map<std::string, std::string> error;
+                            
+                            /**
+                             * Set the error type.
+                             */
+                            error["type"] = "wallet";
+                            
+                            /**
+                             * Set the error value.
+                             */
+                            error["value"] =
+                                "Wallet failed to initialize, refer to log file"
+                            ;
+
+                            /**
+                             * Callback
+                             */
+                            on_error(error);
+                            
+                            exit(0);
+                        }
+                    }
 
                     log_info(
                         "Stack, wallet default address = " <<
@@ -637,22 +867,77 @@ void stack_impl::start()
                         globals::instance().wallet_main()
                     );
                     
+                    /**
+                     * If the wallet has no timestamp set one 60 days ago.
+                     * @note This can be removed once the timestamp is
+                     * set during wallet creation after some time deployed.
+                     */
+                    if (globals::instance().wallet_main()->timestamp() == 0)
+                    {
+                        globals::instance().wallet_main()->set_timestamp(
+                            std::time(0) - 60 * 24 * 60 * 60)
+                        ;
+                        db_wallet("wallet.dat").write_timestamp(
+                            std::time(0) - 60 * 24 * 60 * 60
+                        );
+                    }
+                    
                     log_info(
-                        "Stack, block indexes = " <<
-                        globals::instance().block_indexes().size() <<
-                        ", best block height = " <<
-                        globals::instance().best_block_height() <<
-                        ", best block hash = " <<
-                        stack_impl::get_block_index_best(
-                        )->get_block_hash().to_string() <<
-                        ", key pool size = " <<
-                        globals::instance().wallet_main()->get_key_pool().size()
-                        << ", wallet transactions = " <<
-                        globals::instance().wallet_main()->transactions().size()
-                        << ", address book entries = " <<
-                        globals::instance().wallet_main()->address_book().size()
-                        << "."
+                        "Stack, wallet timestamp is " <<
+                        globals::instance().wallet_main()->timestamp() << "."
                     );
+
+                    /**
+                     * If we are an (SPV) client perform any initialization.
+                     */
+                    if (globals::instance().is_client_spv() == true)
+                    {
+                        globals::instance().set_spv_time_wallet_created(
+                            globals::instance().wallet_main()->timestamp()
+                        );
+                        globals::instance().spv_reset_bloom_filter();
+                    }
+                    
+                    /**
+                     * Thin clients (SPV) do not keep a block index.
+                     */
+                    if (globals::instance().is_client_spv() == false)
+                    {
+                        log_info(
+                            "Stack, block indexes = " <<
+                            globals::instance().block_indexes().size() <<
+                            ", best block height = " <<
+                            globals::instance().best_block_height() <<
+                            ", best block hash = " <<
+                            stack_impl::get_block_index_best(
+                            )->get_block_hash().to_string() <<
+                            ", key pool size = " <<
+                            globals::instance().wallet_main(
+                            )->get_key_pool().size()
+                            << ", wallet transactions = " <<
+                            globals::instance().wallet_main(
+                            )->transactions().size()
+                            << ", address book entries = " <<
+                            globals::instance().wallet_main(
+                            )->address_book().size()
+                            << "."
+                        );
+                    }
+                    else
+                    {
+                        log_info(
+                            "Stack, key pool size = " <<
+                            globals::instance().wallet_main(
+                            )->get_key_pool().size()
+                            << ", wallet transactions = " <<
+                            globals::instance().wallet_main(
+                            )->transactions().size()
+                            << ", address book entries = " <<
+                            globals::instance().wallet_main(
+                            )->address_book().size()
+                            << "."
+                        );
+                    }
     
                     /**
                      * Allocate the status.
@@ -894,30 +1179,6 @@ void stack_impl::start()
                          */
                         m_status_manager->insert(status);
                     }
-                    
-                    /**
-                     * Periodically flush the main wallet.
-                     * :FIXME: Move this into the wallet_manager so that it can
-                     * flush all wallets.
-                     */
-                    timer_wallet_flush_.expires_from_now(
-                        std::chrono::seconds(300)
-                    );
-                    timer_wallet_flush_.async_wait(
-                        globals::instance().strand().wrap(
-                            [this](boost::system::error_code ec)
-                            {
-                                if (ec)
-                                {
-                                    // ...
-                                }
-                                else
-                                {
-                                    globals::instance().wallet_main()->flush();
-                                }
-                            }
-                        )
-                    );
             
                     auto index_rescan = stack_impl::get_block_index_best();
 
@@ -1020,24 +1281,33 @@ void stack_impl::start()
                 /**
                  * Get the number of cores.
                  */
-                auto cores = std::thread::hardware_concurrency();
-
-                /**
-                 * Do not use more than 8 cores.
-                 */
-                if (cores >= 8)
-                {
-                    cores = 7;
-                }
+                auto cores = 0;
                 
                 /**
-                 * Now that the block index is loaded increase the thread
-                 * count to max(3, cores) if required.
+                 * The main IO runs on a single thread with as many child
+                 * threads as needed to perform computational work.
                  */
-                cores = std::max(
-                    static_cast<std::uint32_t> (3 - 1),
-                    static_cast<std::uint32_t> (cores - 1)
-                );
+                if (false)
+                {
+                    cores = std::thread::hardware_concurrency();
+
+                    /**
+                     * Do not use more than 4 cores.
+                     */
+                    if (cores >= 4)
+                    {
+                        cores = 4;
+                    }
+                    
+                    /**
+                     * Now that the block index is loaded increase the thread
+                     * count to max(3, cores) if required.
+                     */
+                    cores = std::max(
+                        static_cast<std::uint32_t> (3 - 1),
+                        static_cast<std::uint32_t> (cores - 1)
+                    );
+                }
 
                 log_info("Stack is adding " << cores << " threads.");
                 
@@ -1140,7 +1410,7 @@ void stack_impl::start()
          */
         on_error(error);
     }
-    
+
     /**
      * Check if we need to export the blockchain.dat file to disk.
      */
@@ -1200,100 +1470,101 @@ void stack_impl::start()
         {
             return;
         }
-    
-        /**
-         * Add wallet transactions that aren't already in a block to the
-         * transactions.
-         */
-        globals::instance().wallet_main()->reaccept_wallet_transactions();
-    
-        /**
-         * Allocate the tcp_acceptor.
-         */
-        m_tcp_acceptor.reset(
-            new tcp_acceptor(globals::instance().io_service(),
-            globals::instance().strand())
-        );
         
         /**
-         * Set the accept handler.
+         * Get the configured TCP port.
          */
-        m_tcp_acceptor->set_on_accept(
-            [this] (std::shared_ptr<tcp_transport> transport)
+        auto tcp_port = m_configuration.network_port_tcp();
+    
+        if (globals::instance().is_client_spv() == false)
+        {
+            /**
+             * Add wallet transactions that aren't already in a block to the
+             * transactions.
+             */
+            globals::instance().wallet_main()->reaccept_wallet_transactions();
+    
+            /**
+             * Allocate the tcp_acceptor.
+             */
+            m_tcp_acceptor.reset(
+                new tcp_acceptor(globals::instance().io_service(),
+                globals::instance().strand())
+            );
+            
+            /**
+             * Set the accept handler.
+             */
+            m_tcp_acceptor->set_on_accept(
+                [this] (std::shared_ptr<tcp_transport> transport)
+                {
+                    /**
+                     * Inform the tcp_connection_manager.
+                     */
+                    m_tcp_connection_manager->handle_accept(transport);
+                }
+            );
+            
+            /**
+             * If the port is zero generate a random one.
+             */
+            if (tcp_port == 0)
             {
                 /**
-                 * Inform the tcp_connection_manager.
+                 * Get a random ephemeral port.
                  */
-                m_tcp_connection_manager->handle_accept(transport);
-            }
-        );
-        
-        /**
-         * Try to use the given port.
-         */
-        std::uint16_t tcp_port = m_configuration.network_port_tcp();
-        
-        /**
-         * If the port is zero generate a random one.
-         */
-        if (tcp_port == 0)
-        {
-            /**
-             * Get a random ephemeral port.
-             */
-            tcp_port = random::uint16_random_range(32768, 61000);
-            
-            /**
-             * Set the network port.
-             */
-            m_configuration.set_network_port_tcp(tcp_port);
-            
-            /**
-             * Save the confiuration.
-             */
-            m_configuration.save();
-        }
-        
-        bool ret = false;
-        
-        while (ret == false)
-        {
-            ret = m_tcp_acceptor->open(tcp_port);
-            
-            if (ret == false)
-            {
-                tcp_port += 2;
-            }
-            else
-            {
+                tcp_port = random::uint16_random_range(32768, 61000);
+                
                 /**
-                 * Set the network tcp port.
+                 * Set the network port.
                  */
                 m_configuration.set_network_port_tcp(tcp_port);
                 
                 /**
-                 * Save the configuration.
+                 * Save the confiuration.
                  */
                 m_configuration.save();
-                
-                break;
             }
             
-            /**
-             * Try 50 even ports before giving up.
-             */
-            if (tcp_port > m_configuration.network_port_tcp() + 100)
+            bool ret = false;
+            
+            while (ret == false)
             {
-                break;
+                ret = m_tcp_acceptor->open(tcp_port);
+                
+                if (ret == false)
+                {
+                    tcp_port += 2;
+                }
+                else
+                {
+                    /**
+                     * Set the network tcp port.
+                     */
+                    m_configuration.set_network_port_tcp(tcp_port);
+                    
+                    /**
+                     * Save the configuration.
+                     */
+                    m_configuration.save();
+                    
+                    break;
+                }
+                
+                /**
+                 * Try 50 even ports before giving up.
+                 */
+                if (tcp_port > m_configuration.network_port_tcp() + 100)
+                {
+                    break;
+                }
             }
-        }
-        
-        if (ret == false)
-        {
-            throw std::runtime_error("failed to start tcp_acceptor");
-        }
-        else
-        {
+            
+            if (ret == false)
+            {
+                throw std::runtime_error("failed to start tcp_acceptor");
+            }
+            
             assert(m_tcp_acceptor->local_endpoint().port() == tcp_port);
             
             /**
@@ -1305,53 +1576,56 @@ void stack_impl::start()
                 "TCP Acceptor started, local endpoint = " <<
                 m_local_endpoint << "."
             );
+        }
       
-            /**
-             * Set the nonce used in the version message.
-             */
-            globals::instance().set_version_nonce(random::uint64());
+        /**
+         * Set the nonce used in the version message.
+         */
+        globals::instance().set_version_nonce(random::uint64());
 
-            log_info(
-                "Stack generated version nonce = " <<
-                globals::instance().version_nonce() << "."
-            );
+        log_info(
+            "Stack generated version nonce = " <<
+            globals::instance().version_nonce() << "."
+        );
 
-            /**
-             * Allocate the address_manager.
-             */
-            m_address_manager.reset(
-                new address_manager(globals::instance().io_service(),
-                globals::instance().strand(), *this)
-            );
-            
-            /**
-             * Allocate the alert_manager.
-             */
-            m_alert_manager.reset(
-                new alert_manager(globals::instance().io_service(), *this)
-            );
-            
-            /**
-             * Allocate the chainblender_manager.
-             */
-            m_chainblender_manager.reset(new chainblender_manager(
-                globals::instance().io_service(),
-                globals::instance().strand(), *this)
-            );
-            
-            /**
-             * Start the chainblender_manager.
-             */
-            m_chainblender_manager->start();
-            
-            /**
-             * Allocate the tcp_connection_manager.
-             */
-            m_tcp_connection_manager.reset(
-                new tcp_connection_manager(globals::instance().io_service(),
-                *this)
-            );
-            
+        /**
+         * Allocate the address_manager.
+         */
+        m_address_manager.reset(
+            new address_manager(globals::instance().io_service(),
+            globals::instance().strand(), *this)
+        );
+        
+        /**
+         * Allocate the alert_manager.
+         */
+        m_alert_manager.reset(
+            new alert_manager(globals::instance().io_service(), *this)
+        );
+        
+        /**
+         * Allocate the chainblender_manager.
+         */
+        m_chainblender_manager.reset(new chainblender_manager(
+            globals::instance().io_service(),
+            globals::instance().strand(), *this)
+        );
+        
+        /**
+         * Start the chainblender_manager.
+         */
+        m_chainblender_manager->start();
+        
+        /**
+         * Allocate the tcp_connection_manager.
+         */
+        m_tcp_connection_manager.reset(
+            new tcp_connection_manager(globals::instance().io_service(),
+            *this)
+        );
+        
+        if (globals::instance().is_client_spv() == false)
+        {
             /**
              * Allocate the nat_pmp_client.
              */
@@ -1363,7 +1637,10 @@ void stack_impl::start()
              * Start the nat_pmp_client.
              */
             m_nat_pmp_client->start();
+        }
 
+        if (globals::instance().is_client_spv() == false)
+        {
             /**
              * Allocate the rpc_manager.
              */
@@ -1376,32 +1653,39 @@ void stack_impl::start()
              * Start the rpc_manager.
              */
             m_rpc_manager->start();
+        }
 
+        if (globals::instance().is_client_spv() == false)
+        {
             /**
              * Allocate the upnp_client.
              */
             m_upnp_client.reset(new upnp_client(
-                globals::instance().io_service(), globals::instance().strand())
+                globals::instance().io_service(),
+                globals::instance().strand())
             );
             
             /**
              * Start the upnp_client.
              */
             m_upnp_client->start();
-            
-            /**
-             * Allocate the zerotime_manager.
-             */
-            m_zerotime_manager.reset(new zerotime_manager(
-                globals::instance().io_service(),
-                globals::instance().strand(), *this)
-            );
-            
-            /**
-             * Start the zerotime_manager.
-             */
-            m_zerotime_manager->start();
-            
+        }
+        
+        /**
+         * Allocate the zerotime_manager.
+         */
+        m_zerotime_manager.reset(new zerotime_manager(
+            globals::instance().io_service(),
+            globals::instance().strand(), *this)
+        );
+        
+        /**
+         * Start the zerotime_manager.
+         */
+        m_zerotime_manager->start();
+        
+        if (globals::instance().is_client_spv() == false)
+        {
             /**
              * Allocate the incentive_manager.
              */
@@ -1414,178 +1698,212 @@ void stack_impl::start()
              * Start the incentive_manager.
              */
             m_incentive_manager->start();
-            
-            /**
-             * Allocate the status.
-             */
-            std::map<std::string, std::string> status;
-            
-            /**
-             * Set the status type.
-             */
-            status["type"] = "network";
-    
-            /**
-             * Set the status value.
-             */
-            status["value"] = "Loading network addresses";
+        }
+        
+        /**
+         * Allocate the status.
+         */
+        std::map<std::string, std::string> status;
+        
+        /**
+         * Set the status type.
+         */
+        status["type"] = "network";
 
-            /**
-             * Callback
-             */
-            m_status_manager->insert(status);
-            
-            /**
-             * Start the address_manager.
-             */
-            m_address_manager->start();
-            
-            /**
-             * Set the status type.
-             */
-            status["type"] = "network";
-    
-            /**
-             * Set the status value.
-             */
-            status["value"] = "Loaded network addresses";
+        /**
+         * Set the status value.
+         */
+        status["value"] = "Loading network addresses";
 
-            /**
-             * Callback
-             */
-            m_status_manager->insert(status);
-            
-            /**
-             * Start the tcp_connection_manager.
-             */
-            m_tcp_connection_manager->start();
-            
-            /**
-             * Allocate the database_stack.
-             */
-            m_database_stack.reset(new database_stack(
-                globals::instance().io_service(),
-                globals::instance().strand(), *this)
-            );
-            
-            /**
-             * Start the UDP layer if configured.
-             */
-            if (m_configuration.network_udp_enable() == true)
+        /**
+         * Callback
+         */
+        m_status_manager->insert(status);
+        
+        /**
+         * Start the address_manager.
+         */
+        m_address_manager->start();
+        
+        /**
+         * Set the status type.
+         */
+        status["type"] = "network";
+
+        /**
+         * Set the status value.
+         */
+        status["value"] = "Loaded network addresses";
+
+        /**
+         * Callback
+         */
+        m_status_manager->insert(status);
+        
+        /**
+         * Start the tcp_connection_manager.
+         */
+        m_tcp_connection_manager->start();
+        
+        /**
+         * Allocate the database_stack.
+         */
+        m_database_stack.reset(new database_stack(
+            globals::instance().io_service(),
+            globals::instance().strand(), *this)
+        );
+        
+        /**
+         * Start the script_checker_queue.
+         */
+        if (globals::instance().is_client_spv() == false)
+        {
+            script_checker_queue::instance().start();
+        }
+        
+        /**
+         * Start the UDP layer if configured.
+         */
+        if (
+            m_configuration.network_udp_enable() == true &&
+            globals::instance().is_client_spv() == false
+            )
+        {
+            if (m_database_stack)
             {
-                if (m_database_stack)
+                m_database_stack->start(
+                    tcp_port,
+                    globals::instance().operation_mode() ==
+                    protocol::operation_mode_client
+                );
+                
+                /**
+                 * Get some addresses from the address_manager.
+                 */
+                auto addrs = m_address_manager->get_addr(96);
+                
+                /**
+                 * Allocate the UDP contacts.
+                 */
+                std::vector< std::pair<std::string, std::uint16_t> >
+                    udp_contacts
+                ;
+                
+                for (auto & i : addrs)
                 {
-                    m_database_stack->start(
-                        tcp_port,
-                        globals::instance().operation_mode() ==
-                        protocol::operation_mode_client
+                    /**
+                     * Add the UDP contact.
+                     */
+                    udp_contacts.push_back(
+                        std::make_pair(i.ipv4_mapped_address().to_string(),
+                        i.port)
                     );
-                    
-                    /**
-                     * Get some addresses from the address_manager.
-                     */
-                    auto addrs = m_address_manager->get_addr(96);
-                    
-                    /**
-                     * Allocate the UDP contacts.
-                     */
-                    std::vector< std::pair<std::string, std::uint16_t> >
-                        udp_contacts
-                    ;
-                    
-                    for (auto & i : addrs)
-                    {
-                        /**
-                         * Add the UDP contact.
-                         */
-                        udp_contacts.push_back(
-                            std::make_pair(i.ipv4_mapped_address().to_string(),
-                            i.port)
-                        );
-                    }
-                    
-                    /**
-                     * Add to the database_stack.
-                     */
-                    m_database_stack->join(udp_contacts);
                 }
+                
+                /**
+                 * Add to the database_stack.
+                 */
+                m_database_stack->join(udp_contacts);
             }
-            
-            /**
-             * Set the status type.
-             */
-            status["type"] = "network";
-    
-            /**
-             * Set the status value.
-             */
-            status["value"] = "Connecting";
+        }
+        
+        /**
+         * Set the status type.
+         */
+        status["type"] = "network";
 
-            /**
-             * Callback
-             */
-            m_status_manager->insert(status);
-            
-            /**
-             * Starts the block status timer.
-             */
-            timer_status_block_.expires_from_now(std::chrono::seconds(1));
-            timer_status_block_.async_wait(
-                globals::instance().strand().wrap(
-                    [this](boost::system::error_code ec)
+        /**
+         * Set the status value.
+         */
+        status["value"] = "Connecting";
+
+        /**
+         * Callback
+         */
+        m_status_manager->insert(status);
+        
+        /**
+         * Starts the block status timer.
+         */
+        timer_status_block_.expires_from_now(std::chrono::seconds(1));
+        timer_status_block_.async_wait(
+            globals::instance().strand().wrap(
+                [this](boost::system::error_code ec)
+                {
+                    if (ec)
                     {
-                        if (ec)
-                        {
-                            // ...
-                        }
-                        else
-                        {
-                            on_status_block();
-                        }
+                        // ...
                     }
-                )
-            );
-            
-            /**
-             * Starts the wallet status timer.
-             */
-            timer_status_wallet_.expires_from_now(std::chrono::seconds(1));
-            timer_status_wallet_.async_wait(
-                globals::instance().strand().wrap(
-                    [this](boost::system::error_code ec)
+                    else
                     {
-                        if (ec)
-                        {
-                            // ...
-                        }
-                        else
-                        {
-                            on_status_wallet();
-                        }
+                        on_status_block();
                     }
-                )
-            );
-            
-            /**
-             * Starts the status blockchain timer.
-             */
-            timer_status_blockchain_.expires_from_now(std::chrono::seconds(8));
-            timer_status_blockchain_.async_wait(
-                globals::instance().strand().wrap(
-                    [this](boost::system::error_code ec)
+                }
+            )
+        );
+        
+        /**
+         * Starts the wallet status timer.
+         */
+        timer_status_wallet_.expires_from_now(std::chrono::seconds(1));
+        timer_status_wallet_.async_wait(
+            globals::instance().strand().wrap(
+                [this](boost::system::error_code ec)
+                {
+                    if (ec)
                     {
-                        if (ec)
-                        {
-                            // ...
-                        }
-                        else
-                        {
-                            on_status_blockchain();
-                        }
+                        // ...
                     }
-                )
-            );
-            
+                    else
+                    {
+                        on_status_wallet();
+                    }
+                }
+            )
+        );
+        
+        /**
+         * Starts the status blockchain timer.
+         */
+        timer_status_blockchain_.expires_from_now(std::chrono::seconds(8));
+        timer_status_blockchain_.async_wait(
+            globals::instance().strand().wrap(
+                [this](boost::system::error_code ec)
+                {
+                    if (ec)
+                    {
+                        // ...
+                    }
+                    else
+                    {
+                        on_status_blockchain();
+                    }
+                }
+            )
+        );
+        
+        /**
+         * Starts the database environment timer.
+         */
+        timer_database_env_.expires_from_now(std::chrono::seconds(8));
+        timer_database_env_.async_wait(
+            globals::instance().strand().wrap(
+                [this](boost::system::error_code ec)
+                {
+                    if (ec)
+                    {
+                        // ...
+                    }
+                    else
+                    {
+                        on_database_env();
+                    }
+                }
+            )
+        );
+        
+        if (globals::instance().is_client_spv() == false)
+        {
             /**
              * Allocate the mining_manager.
              */
@@ -1597,40 +1915,51 @@ void stack_impl::start()
              * Start the mining manager.
              */
             m_mining_manager->start();
-            
-            /**
-             * Add port mappings by posting to the boost::asio::io_service to
-             * induce a slight delay.
-             */
-            globals::instance().io_service().post(
-                globals::instance().strand().wrap([this, tcp_port]()
+        }
+        
+        /**
+         * Add port mappings by posting to the boost::asio::io_service to
+         * induce a slight delay.
+         */
+        globals::instance().io_service().post(
+            globals::instance().strand().wrap([this, tcp_port]()
+        {
+            if (globals::instance().is_client_spv() == false)
             {
                 /**
                  * Add a mapping for our TCP port.
                  */
-                m_nat_pmp_client->add_mapping(nat_pmp::protocol_tcp, tcp_port);
+                m_nat_pmp_client->add_mapping(
+                    nat_pmp::protocol_tcp, tcp_port
+                );
             
                 /**
                  * Add a mapping for our UDP port.
                  */
-                m_nat_pmp_client->add_mapping(nat_pmp::protocol_udp, tcp_port);
+                m_nat_pmp_client->add_mapping(
+                    nat_pmp::protocol_udp, tcp_port
+                );
                 
                 /**
                  * Add a mapping for out TCP port.
                  */
-                m_upnp_client->add_mapping(upnp_client::protocol_tcp, tcp_port);
+                m_upnp_client->add_mapping(
+                    upnp_client::protocol_tcp, tcp_port
+                );
                 
                 /**
                  * Add a mapping for out UDP port.
                  */
-                m_upnp_client->add_mapping(upnp_client::protocol_udp, tcp_port);
-                
-                /**
-                 * Download centrally hosted bootstrap peers.
-                 */
-                do_check_peers(0);
-            }));
-        }
+                m_upnp_client->add_mapping(
+                    upnp_client::protocol_udp, tcp_port
+                );
+            }
+            
+            /**
+             * Download centrally hosted bootstrap peers.
+             */
+            do_check_peers(0);
+        }));
     }));
     
     /**
@@ -1652,6 +1981,14 @@ void stack_impl::stop()
     if (m_configuration.save() == false)
     {
         log_error("Stack failed to save configuration to disk.");
+    }
+
+    if (globals::instance().is_client_spv() == true)
+    {
+        /**
+         * Save the last block_merkle's to disk.
+         */
+        spv_block_merkles_save();
     }
     
     /**
@@ -1754,16 +2091,19 @@ void stack_impl::stop()
     }
     
     /**
+     * Stop the script_checker_queue.
+     */
+    if (globals::instance().is_client_spv() == false)
+    {
+        script_checker_queue::instance().stop();
+    }
+    
+    /**
      * Unregister the main wallet.
      */
     wallet_manager::instance().unregister_wallet(
         globals::instance().wallet_main()
     );
-    
-    /**
-     * Cancel the wallet flush timer.
-     */
-    timer_wallet_flush_.cancel();
     
     /**
      * Cancel the block status timer.
@@ -1781,27 +2121,17 @@ void stack_impl::stop()
     timer_status_blockchain_.cancel();
     
     /**
-     * Detach the block_index objects from each other.
+     * Cancel the database environment timer.
      */
-    for (auto & i : globals::instance().block_indexes())
-    {
-        /**
-         * Set the previous block index to null.
-         */
-        if (i.second)
-        {
-            i.second->set_block_index_previous(std::shared_ptr<block_index> ());
-            
-            /**
-             * Set the next block index to null.
-             */
-            i.second->set_block_index_next(std::shared_ptr<block_index> ());
-        }
-    }
+    timer_database_env_.cancel();
     
     /**
-     * :FIXME: There is an io_service object that is not being cancelled so
-     * calling join will block preventing exit.
+     * Cancel the block_merkle's save timer.
+     */
+    timer_block_merkles_save_.cancel();
+    
+    /**
+     * Stop the boost::asio::io_service.
      */
     globals::instance().io_service().stop();
     
@@ -1809,22 +2139,6 @@ void stack_impl::stop()
      * Reset the work.
      */
     work_.reset();
-    
-    /**
-     * Flush the db_env.
-     */
-    if (g_db_env)
-    {
-        g_db_env->flush();
-    }
-    
-    /**
-     * Close the db_env.
-     */
-    if (g_db_env)
-    {
-        g_db_env->close_DbEnv();
-    }
     
     /**
      * Join the threads.
@@ -1842,6 +2156,36 @@ void stack_impl::stop()
         {
             // ...
         }
+    }
+
+    /**
+     * Detach the block_index objects from each other.
+     */
+    for (auto & i : globals::instance().block_indexes())
+    {
+        /**
+         * Set the previous block index to null.
+         */
+        if (i.second)
+        {
+            delete i.second;
+        }
+    }
+
+    /**
+     * Flush the db_env.
+     */
+    if (g_db_env)
+    {
+        g_db_env->flush();
+    }
+    
+    /**
+     * Close the db_env.
+     */
+    if (g_db_env)
+    {
+        g_db_env->close_DbEnv();
     }
     
     /**
@@ -1912,9 +2256,9 @@ void stack_impl::stop()
     globals::instance().stake_seen_orphan().clear();
     globals::instance().relay_invs().clear();
     globals::instance().relay_inv_expirations().clear();
-    g_block_index_genesis = std::shared_ptr<block_index> ();
+    g_block_index_genesis = 0;
     g_seen_stake.clear();
-    g_block_index_best = std::shared_ptr<block_index> ();
+    g_block_index_best = 0;
     
     /**
      * Set the state to stopped.
@@ -2797,6 +3141,147 @@ void stack_impl::rpc_send(const std::string & command_line)
     }
 }
 
+void stack_impl::rescan_chain()
+{
+    if (globals::instance().is_client_spv() == true)
+    {
+        globals::instance().io_service().post(
+            globals::instance().strand().wrap([this]()
+        {
+            const auto * block_last =
+                globals::instance().spv_block_last().get()
+            ;
+
+            auto found_last_header = false;
+            
+            while (block_last && block_last->height() > 0)
+            {
+                /**
+                 * Get the time of the last block header.
+                 */
+                auto time_last_header = static_cast<std::time_t> (
+                    block_last->block_header().timestamp)
+                ;
+                
+                if (
+                    time_last_header <
+                    globals::instance().spv_time_wallet_created()
+                    )
+                {
+                    std::unique_ptr<block_merkle> merkle_block(
+                        new block_merkle(*block_last)
+                    );
+                    
+                    globals::instance().set_spv_block_last(*merkle_block);
+                    globals::instance().set_spv_best_block_height(
+                        merkle_block->height()
+                    );
+                    
+                    log_info(
+                        "Stack is performing (SPV) rescan from wallet time "
+                        "height " << merkle_block->height() << "."
+                    );
+                    
+                    found_last_header = true;
+                    
+                    break;
+                }
+                else
+                {
+                    block_last =
+                        globals::instance().spv_block_merkles()[
+                        block_last->block_header().hash_previous_block].get()
+                    ;
+                }
+            }
+
+            if (found_last_header == false)
+            {
+                auto spv_checkpoints =
+                    checkpoints::instance().get_spv_checkpoints()
+                ;
+                
+                auto it = spv_checkpoints.rbegin();
+                
+                for (; it != spv_checkpoints.rend(); ++it)
+                {
+                    if (
+                        it->second.second <
+                        globals::instance().spv_time_wallet_created()
+                        )
+                    {
+                        std::unique_ptr<block_merkle> merkle_block(
+                            new block_merkle(it->first, it->second.first)
+                        );
+                        
+                        globals::instance().set_spv_block_last(merkle_block);
+                        globals::instance().set_spv_best_block_height(
+                            merkle_block->height()
+                        );
+                        
+                        globals::instance().spv_block_merkles().clear();
+                        
+                        globals::instance().spv_block_merkles()[
+                            merkle_block->get_hash()].reset(
+                            new block_merkle(*merkle_block)
+                        );
+                        
+                        log_info(
+                            "Stack is performing (SPV) rescan from checkpoint"
+                            " height " << merkle_block->height() << "."
+                        );
+                
+                        break;
+                    }
+                }
+            }
+            
+            /**
+             * Set (SPV) use getblocks to false so that when we reconnect
+             * we are requesting headers instead.
+             */
+            globals::instance().set_spv_use_getblocks(false);
+            
+            auto it = globals::instance().spv_block_merkles().begin();
+            
+            while (it != globals::instance().spv_block_merkles().end())
+            {
+                if (
+                    it->second && it->second->height() >
+                    globals::instance().spv_best_block_height()
+                    )
+                {
+                    it = globals::instance().spv_block_merkles().erase(it);
+                }
+                else
+                {
+                    ++it;
+                }
+            }
+        
+            for (auto & i : m_tcp_connection_manager->tcp_connections())
+            {
+                if (auto connection = i.second.lock())
+                {
+                    connection->stop();
+                }
+            }
+        }));
+    }
+    else
+    {
+        /**
+         * Set the configuration to rescan on the next start.
+         */
+        m_configuration.set_wallet_rescan(true);
+        
+        /**
+         * Save the configuration.
+         */
+        m_configuration.save();
+    }
+}
+
 void stack_impl::set_configuration_wallet_transaction_history_maximum(
     const std::time_t & val
     )
@@ -2904,12 +3389,9 @@ bool stack_impl::process_block(
     if (globals::instance().state() < globals::state_stopping)
     {
         /**
-         * @note Because of the synchronisation mechanisms in place in may be
-         * safe to remove this mutex in the future.
+         * Lock the main std::recursive_mutex.
          */
-        static std::mutex g_mutex;
-        
-        std::lock_guard<std::mutex> l1(g_mutex);
+        std::lock_guard<std::recursive_mutex> l1(g_mutex);
         
         /**
          * Check for duplicate.
@@ -3247,6 +3729,351 @@ bool stack_impl::process_block(
     return false;
 }
 
+void stack_impl::spv_block_merkles_save()
+{
+    /**
+     * Post the operation onto the boost::asio::io_service.
+     */
+    globals::instance().io_service().post(
+        globals::instance().strand().wrap([this]()
+    {
+        const auto & block_merkles = globals::instance().spv_block_merkles();
+        
+        log_info(
+            "Stack is saving " << block_merkles.size() <<
+            " block_merkle's to disk."
+        );
+    
+        auto f = std::make_shared<file> ();
+        
+        auto count = 0;
+        
+        std::string path =
+            filesystem::data_path() + "block-headers-client-thin.dat"
+        ;
+        std::string path_last =
+            filesystem::data_path() + "block-headers-client-thin.dat.last"
+        ;
+        
+        /**
+         * Make a copy of the previous file so we can load it should this one
+         * become corrupted.
+         */
+        std::rename(path.c_str(), path_last.c_str());
+        
+        if (f && f->open(path.c_str(), "wb"))
+        {
+            /**
+             * Allocate the buffer.
+             */
+            data_buffer buffer_blocks;
+            
+            for (auto & i : block_merkles)
+            {
+                if (i.second)
+                {
+                    if ((count % 2000) == 0)
+                    {
+                        log_debug(
+                            "Stack is saving block_merkle " <<
+                            i.second->height() << ":" <<
+                            i.first.to_string().substr(0, 8) << "."
+                        );
+                    }
+                    
+                    /**
+                     * Encode the block_merkle into the buffer.
+                     */
+                    i.second->encode(buffer_blocks, true);
+                    
+                    count++;
+                }
+            }
+            
+            /**
+             * Calculate the checksum of all encoded block_merkles.
+             */
+            auto checksum = buffer_blocks.checksum();
+            
+            /**
+             * Write the checksum to the end of the file.
+             */
+            buffer_blocks.write_uint32(checksum);
+            
+            /**
+             * Write the block buffer.
+             */
+            f->write(buffer_blocks.data(), buffer_blocks.size());
+
+            /**
+             * Flush
+             */
+            f->fflush();
+            
+            /**
+             * Sync
+             */
+            f->fsync();
+        }
+        
+        log_info("Stack saved " << count << " block_merkle's to disk.");
+        
+        /**
+         * Starts the block_merkle's save timer.
+         */
+        timer_block_merkles_save_.expires_from_now(
+            std::chrono::seconds(60 * 60)
+        );
+        timer_block_merkles_save_.async_wait(
+            globals::instance().strand().wrap(
+                [this](boost::system::error_code ec)
+                {
+                    if (ec)
+                    {
+                        // ...
+                    }
+                    else
+                    {
+                        /**
+                         * Save the (SPV) block_merkle's to disk.
+                         */
+                        spv_block_merkles_save();
+                    }
+                }
+            )
+        );
+    }));
+}
+
+void stack_impl::spv_block_merkles_load(std::uint8_t & trys)
+{
+    assert(trys <= 1);
+
+    std::string path =
+        filesystem::data_path() + "block-headers-client-thin.dat"
+    ;
+    std::string path_last =
+        filesystem::data_path() + "block-headers-client-thin.dat.last"
+    ;
+    
+    auto f = std::make_shared<file> ();
+    
+    if (f && f->open(trys == 0 ? path.c_str() : path_last.c_str(), "rb"))
+    {
+        data_buffer buffer_blocks(f);
+  
+        auto size = f->size();
+        
+        auto bytes = buffer_blocks.read_bytes(size);
+        
+        std::uint32_t checksum = 0;
+        
+        std::memcpy(
+            &checksum, &bytes[size - sizeof(checksum)], sizeof(checksum)
+        );
+
+        buffer_blocks = data_buffer(
+            reinterpret_cast<const char *> (&bytes[0]),
+            bytes.size() - sizeof(checksum)
+        );
+
+        /**
+         * Calculate the checksum of all encoded block_merkles and compare
+         * with the checksum from the end of the file.
+         */
+        if (checksum != buffer_blocks.checksum())
+        {
+            log_error("Stack got invalid checksum for " << path << ".");
+            
+            /**
+             * Try loading the .last file and call load again if no last file
+             * is found do nothing.
+             */
+            if (trys < 1)
+            {
+                trys++;
+                
+                spv_block_merkles_load(trys);
+            }
+            else
+            {
+                trys++;
+                
+                /**
+                 * Invalid files will be rewritten during chain synchronisation.
+                 */
+            }
+        }
+        else
+        {
+            /**
+             * The number of blocks we've loaded from disk.
+             */
+            auto blocks_loaded = 0;
+            
+            std::uint32_t block_number = 0;
+
+            while (buffer_blocks.remaining() >= block::header_length)
+            {
+                block_merkle merkle_block;
+                
+                if (merkle_block.decode(buffer_blocks, true) == true)
+                {
+                    log_debug("Stack loaded block " << merkle_block.height());
+                    
+                    if (merkle_block.height() > block_number)
+                    {
+                        block_number = merkle_block.height();
+
+                        globals::instance().set_spv_block_last(merkle_block);
+                        globals::instance().set_spv_best_block_height(
+                            block_number
+                        );
+                    }
+                    
+                    globals::instance().spv_block_merkles()[
+                        merkle_block.get_hash()
+                    ].reset(new block_merkle(merkle_block));
+                    
+                    /**
+                     * Increment the number of blocks loaded.
+                     */
+                    blocks_loaded++;
+                    
+                    /**
+                     * The maximum number of blocks we retain.
+                     */
+                    enum { two_weeks_of_blocks = 10752 };
+                    
+                    /**
+                     * Calculate the percentage of blocks loaded based on a
+                     * maximum of two weeks worth.
+                     */
+                    float percentage =
+                        ((float)blocks_loaded /
+                        (float)two_weeks_of_blocks) * 100.0f
+                    ;
+                    
+                    /**
+                     * Only callback status every 100 blocks.
+                     */
+                    if ((blocks_loaded % 100) == 0)
+                    {
+                        /**
+                         * Allocate the status.
+                         */
+                        std::map<std::string, std::string> status;
+
+                        /**
+                         * Set the status type.
+                         */
+                        status["type"] = "database";
+
+                        /**
+                         * Format the block verification progress percentage.
+                         */
+                        std::stringstream ss;
+
+                        ss <<
+                            std::fixed << std::setprecision(2) << percentage
+                        ;
+            
+                        /**
+                         * Set the status value.
+                         */
+                        status["value"] = "Verifying " + ss.str() + "%";
+
+                        /**
+                         * The block verify percentage.
+                         */
+                        status["blockchain.verify.percent"] =
+                            std::to_string(percentage)
+                        ;
+            
+                        /**
+                         * Callback
+                         */
+                        if (m_status_manager)
+                        {
+                            m_status_manager->insert(status);
+                        }
+                    }
+                }
+                else
+                {
+                    break;
+                }
+            }
+            
+            log_debug(
+                "Stack loaded blocks, best height = " <<
+                globals::instance().spv_best_block_height() << "."
+            );
+            
+            float percentage = 100.0f;
+        
+            /**
+             * Allocate the status.
+             */
+            std::map<std::string, std::string> status;
+
+            /**
+             * Set the status type.
+             */
+            status["type"] = "database";
+
+            /**
+             * Format the block verification progress percentage.
+             */
+            std::stringstream ss;
+
+            ss <<
+                std::fixed << std::setprecision(2) << percentage
+            ;
+
+            /**
+             * Set the status value.
+             */
+            status["value"] = "Verifying " + ss.str() + "%";
+
+            /**
+             * The block verify percentage.
+             */
+            status["blockchain.verify.percent"] =
+                std::to_string(percentage)
+            ;
+
+            /**
+             * Callback
+             */
+            if (m_status_manager)
+            {
+                m_status_manager->insert(status);
+            }
+        }
+    }
+    else
+    {
+        /**
+         * Try loading the .last file.
+         */
+        if (trys < 1)
+        {
+            trys++;
+            
+            spv_block_merkles_load(trys);
+        }
+        else
+        {
+            trys++;
+            
+            /**
+             * Invalid files will be rewritten during chain synchronisation.
+             */
+        }
+    }
+}
+
 configuration & stack_impl::get_configuration()
 {
     return m_configuration;
@@ -3309,12 +4136,22 @@ std::shared_ptr<incentive_manager> & stack_impl::get_incentive_manager()
     return m_incentive_manager;
 }
 
+std::recursive_mutex & stack_impl::mutex()
+{
+    return g_mutex;
+}
+
 std::shared_ptr<db_env> & stack_impl::get_db_env()
 {
     return g_db_env;
 }
 
-std::shared_ptr<block_index> & stack_impl::get_block_index_genesis()
+void stack_impl::set_block_index_genesis(block_index * val)
+{
+    g_block_index_genesis = val;
+}
+
+block_index * stack_impl::get_block_index_genesis()
 {
     return g_block_index_genesis;
 }
@@ -3324,7 +4161,12 @@ std::set< std::pair<point_out, std::uint32_t> > & stack_impl::get_seen_stake()
     return g_seen_stake;
 }
 
-std::shared_ptr<block_index> & stack_impl::get_block_index_best()
+void stack_impl::set_block_index_best(block_index * val)
+{
+    g_block_index_best = val;
+}
+
+block_index * stack_impl::get_block_index_best()
 {
     return g_block_index_best;
 }
@@ -3339,11 +4181,11 @@ big_number & stack_impl::get_best_invalid_trust()
     return g_best_invalid_trust;
 }
 
-std::shared_ptr<block_index> stack_impl::insert_block_index(
+block_index * stack_impl::insert_block_index(
     const sha256 & hash_block
     )
 {
-    std::shared_ptr<block_index> ret;
+    block_index * ret = 0;
     
     if (hash_block == 0)
     {
@@ -3358,8 +4200,15 @@ std::shared_ptr<block_index> stack_impl::insert_block_index(
     }
     else
     {
-        ret = std::make_shared<block_index> ();
+        ret = new block_index();
     
+        if (ret == 0)
+        {
+            throw std::runtime_error(
+                "Failed to insert block index (unable to allocate memory)."
+            );
+        }
+        
         ret->set_hash_block(hash_block);
         
         globals::instance().block_indexes()[hash_block] = ret;
@@ -3370,6 +4219,11 @@ std::shared_ptr<block_index> stack_impl::insert_block_index(
 
 const std::int32_t & stack_impl::local_block_count() const
 {
+    if (globals::instance().is_client_spv() == true)
+    {
+        return globals::instance().spv_best_block_height();
+    }
+    
     return globals::instance().best_block_height();
 }
 
@@ -3381,24 +4235,82 @@ const std::uint32_t stack_impl::peer_block_count() const
     ;
 }
 
-double stack_impl::difficulty(const std::shared_ptr<block_index> & index) const
+double stack_impl::difficulty(block_index * index) const
 {
-    std::shared_ptr<block_index> index_tmp;
-    
-    if (index)
+    if (globals::instance().is_client_spv() == true)
     {
-        index_tmp = index;
+        if (globals::instance().spv_block_last())
+        {
+            static std::uint32_t g_last_bits = 0;
+            
+            /**
+             * If the last block is Proof-of-Stake and we have not yet received
+             * a Proof-of-Work block go back in history and get the last
+             * Proof-of-Work's header bits.
+             */
+            if (g_last_bits == 0)
+            {
+                std::int32_t block_height = 0;
+                
+                for (auto & i : globals::instance().spv_block_merkles())
+                {
+                    if (
+                        i.second->height() > block_height &&
+                        i.second->block_header().nonce != 0
+                        )
+                    {
+                        block_height = i.second->height();
+                        
+                        g_last_bits = i.second->block_header().bits;
+                    }
+                }
+            }
+            
+            /**
+             * Skip Proof-of-Stake blocks.
+             */
+            if (
+                globals::instance().spv_block_last()->block_header().nonce == 0
+                )
+            {
+                return utility::difficulty_from_bits(g_last_bits);
+            }
+            else
+            {
+                if (
+                    g_last_bits != globals::instance().spv_block_last(
+                    )->block_header().bits
+                    )
+                {
+                    g_last_bits =
+                        globals::instance().spv_block_last(
+                        )->block_header().bits
+                    ;
+                }
+            
+                return utility::difficulty_from_bits(g_last_bits);
+            }
+        }
     }
     else
     {
-        index_tmp = utility::get_last_block_index(
-            stack_impl::get_block_index_best(), false
-        );
-    }
+        block_index * index_tmp = 0;
+        
+        if (index)
+        {
+            index_tmp = index;
+        }
+        else
+        {
+            index_tmp = const_cast<block_index *> (utility::get_last_block_index(
+                stack_impl::get_block_index_best(), false)
+            );
+        }
 
-    if (index_tmp)
-    {
-        return utility::difficulty_from_bits(index_tmp->bits());
+        if (index_tmp)
+        {
+            return utility::difficulty_from_bits(index_tmp->bits());
+        }
     }
     
     return 1.0;
@@ -3469,6 +4381,27 @@ void stack_impl::on_alert(const std::map<std::string, std::string> & pairs)
     std::lock_guard<std::recursive_mutex> l1(mutex_callback_);
     
     stack_.on_alert(pairs);
+}
+
+void stack_impl::on_spv_merkle_block(
+    const std::shared_ptr<tcp_connection> & connection,
+    block_merkle & merkle_block,
+    const std::vector<transaction> & transactions_received
+    )
+{
+    /**
+     * ZeroLedger :-)
+     */
+}
+
+void stack_impl::set_spv_block_height(
+    const std::int32_t & height, const std::time_t & time,
+    const std::vector<sha256> & hashes_tx
+    )
+{
+    /**
+     * ZeroLedger :-)
+     */
 }
 
 void stack_impl::on_status_block()
@@ -3766,59 +4699,73 @@ void stack_impl::on_status_wallet()
 
 void stack_impl::on_status_blockchain()
 {
-    log_debug(
-        "block_indexes: " << globals::instance().block_indexes().size()
-    );
-    log_debug(
-        "proofs_of_stake: " << globals::instance().proofs_of_stake().size()
-    );
-    log_debug(
-        "orphan_blocks: " << globals::instance().orphan_blocks().size()
-    );
-    log_debug(
-        "orphan_blocks_by_previous: " <<
-        globals::instance().orphan_blocks_by_previous().size()
-    );
-    log_debug(
-        "orphan_transactions: " <<
-        globals::instance().orphan_transactions().size()
-    );
-    log_debug(
-        "orphan_transactions_by_previous: " <<
-        globals::instance().orphan_transactions_by_previous().size()
-    );
-    log_debug(
-        "stake_seen_orphan: " << globals::instance().stake_seen_orphan().size()
-    );
-    log_debug("relay_invs: " << globals::instance().relay_invs().size());
-    log_debug(
-        "relay_inv_expirations: " <<
-        globals::instance().relay_inv_expirations().size()
-    );
-    
-    if (globals::instance().money_supply() > 0)
+    if (globals::instance().is_client_spv() == true)
     {
-        /**
-         * Allocate the status.
-         */
-        std::map<std::string, std::string> status;
+        log_debug(
+            "block_merkles: " << globals::instance().spv_block_merkles().size()
+        );
+        log_debug("relay_invs: " << globals::instance().relay_invs().size());
+        log_debug(
+            "relay_inv_expirations: " <<
+            globals::instance().relay_inv_expirations().size()
+        );
+    }
+    else
+    {
+        log_debug(
+            "block_indexes: " << globals::instance().block_indexes().size()
+        );
+        log_debug(
+            "proofs_of_stake: " << globals::instance().proofs_of_stake().size()
+        );
+        log_debug(
+            "orphan_blocks: " << globals::instance().orphan_blocks().size()
+        );
+        log_debug(
+            "orphan_blocks_by_previous: " <<
+            globals::instance().orphan_blocks_by_previous().size()
+        );
+        log_debug(
+            "orphan_transactions: " <<
+            globals::instance().orphan_transactions().size()
+        );
+        log_debug(
+            "orphan_transactions_by_previous: " <<
+            globals::instance().orphan_transactions_by_previous().size()
+        );
+        log_debug(
+            "stake_seen_orphan: " << globals::instance().stake_seen_orphan().size()
+        );
+        log_debug("relay_invs: " << globals::instance().relay_invs().size());
+        log_debug(
+            "relay_inv_expirations: " <<
+            globals::instance().relay_inv_expirations().size()
+        );
         
-        /**
-         * Set the type.
-         */
-        status["type"] = "database";
-        
-        /**
-         * Set the blockchain.money.
-         */
-        status["blockchain.money_supply"] =
-            std::to_string(globals::instance().money_supply() / 1000000)
-        ;
-        
-        /**
-         * Callback
-         */
-        m_status_manager->insert(status);
+        if (globals::instance().money_supply() > 0)
+        {
+            /**
+             * Allocate the status.
+             */
+            std::map<std::string, std::string> status;
+            
+            /**
+             * Set the type.
+             */
+            status["type"] = "database";
+            
+            /**
+             * Set the blockchain.money.
+             */
+            status["blockchain.money_supply"] =
+                std::to_string(globals::instance().money_supply() / 1000000)
+            ;
+            
+            /**
+             * Callback
+             */
+            m_status_manager->insert(status);
+        }
     }
     
     /**
@@ -3840,6 +4787,55 @@ void stack_impl::on_status_blockchain()
             }
         )
     );
+}
+
+void stack_impl::on_database_env()
+{
+    if (globals::instance().is_client_spv() == false)
+    {
+        /**
+         * Make sure no other threads can access the db_env for this scope.
+         */
+        std::lock_guard<std::recursive_mutex> l1(db_env::mutex_DbEnv());
+        
+        auto start = std::chrono::system_clock::now();
+        
+        if (stack_impl::get_db_env())
+        {
+            /**
+             * Perform any statistics, logging, etc here.
+             */
+        }
+        
+        std::chrono::duration<double> elapsed_seconds =
+            std::chrono::system_clock::now() - start
+        ;
+        
+        log_info(
+            "Database environment took " << elapsed_seconds.count() <<
+            " seconds."
+        );
+        
+        /**
+         * Starts the database environment timer.
+         */
+        timer_database_env_.expires_from_now(std::chrono::seconds(60 * 60));
+        timer_database_env_.async_wait(
+            globals::instance().strand().wrap(
+                [this](boost::system::error_code ec)
+                {
+                    if (ec)
+                    {
+                        // ...
+                    }
+                    else
+                    {
+                        on_database_env();
+                    }
+                }
+            )
+        );
+    }
 }
 
 const boost::asio::ip::tcp::endpoint & stack_impl::local_endpoint() const
@@ -3997,7 +4993,7 @@ void stack_impl::create_directories()
      * Create the application data path on the sdcard.
      */
     filesystem::create_path(
-        "/sdcard/Android/data/net.vanillacoin.vanillacoin"
+        "/sdcard/Android/data/net.vcash.vcash"
     );
 #endif // __ANDROID__
 }
@@ -4006,6 +5002,23 @@ void stack_impl::load_block_index(
     const std::function<void (const bool & success)> & f
     )
 {
+    /**
+     * Thin clients (SPV) do not keep a block index.
+     */
+    if (globals::instance().is_client_spv() == true)
+    {
+        globals::instance().io_service().post(globals::instance().strand().wrap(
+            [this, f]()
+        {
+            if (f)
+            {
+                f(true);
+            }
+        }));
+    
+        return;
+    }
+    
     /**
      * Load the block index by posting it to the boost::asio::io_service.
      */
@@ -4030,155 +5043,9 @@ void stack_impl::load_block_index(
             if (globals::instance().block_indexes().size() == 0)
             {
                 /**
-                 * Genesis block creation.
+                 * Create the genesis block.
                  */
-                std::string timestamp_quote =
-                    "December 22, 2014 - New York Times calls for Cheney, "
-                    "Bush officials to be investigated and prosecuted for "
-                    "torture."
-                ;
-                
-                /**
-                 * Allocate a new transaction.
-                 */
-                transaction tx_new;
-                
-                /**
-                 * Set the transaction time to the time of the start of the
-                 * chain.
-                 */
-                tx_new.set_time(constants::chain_start_time);
-                
-                /**
-                 * Allocate one input.
-                 */
-                tx_new.transactions_in().resize(1);
-                
-                /**
-                 * Allocate one output.
-                 */
-                tx_new.transactions_out().resize(1);
-
-                /**
-                 * Create the script signature.
-                 */
-                auto script_signature =
-                    script() << 486604799 << big_number(9999) <<
-                    std::vector<std::uint8_t>(
-                    (const std::uint8_t *)timestamp_quote.c_str(),
-                    (const std::uint8_t *)timestamp_quote.c_str() +
-                    timestamp_quote.size()
-                );
-
-                /**
-                 * Set the script signature on the input.
-                 */
-                tx_new.transactions_in()[0].set_script_signature(
-                    script_signature
-                );
-                
-                /**
-                 * Set the output to empty.
-                 */
-                tx_new.transactions_out()[0].set_empty();
-
-                /**
-                 * Allocate the genesis block.
-                 */
-                block blk;
-                
-                /**
-                 * Add the transactions.
-                 */
-                blk.transactions().push_back(tx_new);
-                
-                /**
-                 * There is no previous block.
-                 */
-                blk.header().hash_previous_block = 0;
-                
-                /**
-                 * Build the merkle tree.
-                 */
-                blk.header().hash_merkle_root = blk.build_merkle_tree();
-                
-                /**
-                 * Set the header version.
-                 */
-                blk.header().version = 1;
-                
-                /**
-                 * Set the header timestamp.
-                 */
-                blk.header().timestamp = constants::chain_start_time;
-                
-                /**
-                 * Set the header bits.
-                 */
-                blk.header().bits =
-                    constants::proof_of_work_limit.get_compact()
-                ;
-                
-                assert(blk.header().bits == 504365055);
-                
-                /**
-                 * The test network uses a different genesis block by using a
-                 * different nonce.
-                 */
-                if (constants::test_net == true)
-                {
-                    /**
-                     * Set the header nonce.
-                     */
-                    blk.header().nonce =
-                        constants::chain_start_time - 10000 + 1
-                    ;
-                }
-                else
-                {
-                    /**
-                     * Set the header nonce.
-                     */
-                    blk.header().nonce = constants::chain_start_time - 10000;
-                }
-
-                /**
-                 * Print the block.
-                 */
-                blk.print();
-
-                log_debug(
-                    "Block hash = " << blk.get_hash().to_string() << "."
-                );
-                log_debug(
-                    "Block header hash merkle root = " <<
-                    blk.header().hash_merkle_root.to_string() << "."
-                );
-                log_debug(
-                    "Block header time = " << blk.header().timestamp << "."
-                );
-                log_debug(
-                    "Block header nonce = " << blk.header().nonce << "."
-                );
-
-                /**
-                 * Check the merkle root hash.
-                 */
-                assert(
-                    blk.header().hash_merkle_root ==
-                    sha256("e6dc22fdcfcbffccb14cacfab0f0af67721d38f2929d8344cb"
-                    "1635ac400e2e68")
-                    
-                );
-                
-                /**
-                 * Check the genesis block hash.
-                 */
-                assert(
-                    blk.get_hash() ==
-                    (constants::test_net ? block::get_hash_genesis_test_net() :
-                    block::get_hash_genesis())
-                );
+                auto blk = block::create_genesis();
                 
                 /**
                  * Start new block file.
@@ -4488,9 +5355,7 @@ void stack_impl::backup_last_wallet_file()
         /**
          * Backup the wallet.
          */
-        if (
-            std::ifstream(filesystem::data_path() + "wallet.dat").good()
-            )
+        if (std::ifstream(filesystem::data_path() + "wallet.dat").good())
         {
             if (
                 filesystem::copy_file(filesystem::data_path() +

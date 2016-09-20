@@ -1,9 +1,9 @@
 /*
  * Copyright (c) 2013-2016 John Connor (BM-NC49AxAjcqVcF5jNPu85Rb8MJ2d9JqZt)
  *
- * This file is part of vanillacoin.
+ * This file is part of vcash.
  *
- * vanillacoin is free software: you can redistribute it and/or modify
+ * vcash is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License with
  * additional permissions to the one published by the Free Software
  * Foundation, either version 3 of the License, or (at your option)
@@ -146,6 +146,18 @@ void wallet_manager::on_transaction_updated(const sha256 & val)
     for (auto & i : m_wallets)
     {
         i->on_transaction_updated(val);
+    }
+}
+
+void wallet_manager::on_spv_transaction_updated(
+    const std::int32_t & height, const sha256 & hash_tx
+    )
+{
+    std::lock_guard<std::mutex> l1(mutex_);
+    
+    for (auto & i : m_wallets)
+    {
+        i->on_spv_transaction_updated(height, hash_tx);
     }
 }
 

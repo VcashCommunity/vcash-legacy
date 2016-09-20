@@ -1,9 +1,9 @@
  /*
  * Copyright (c) 2013-2016 John Connor (BM-NC49AxAjcqVcF5jNPu85Rb8MJ2d9JqZt)
  *
- * This file is part of vanillacoin.
+ * This file is part of vcash.
  *
- * vanillacoin is free software: you can redistribute it and/or modify
+ * vcash is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License with
  * additional permissions to the one published by the Free Software
  * Foundation, either version 3 of the License, or (at your option)
@@ -82,6 +82,8 @@ namespace coin {
 			{
                 clear();
                 
+                m_data.reserve(other.size());
+
 			    write_bytes(other.data(), other.size());
                 
                 m_read_ptr = m_data.size() > 0 ? &m_data[0] : 0;
@@ -95,6 +97,8 @@ namespace coin {
 			    : m_read_ptr(0)
                 , file_offset_(0)
 			{
+                m_data.reserve(len);
+                
 			    for (std::size_t i = 0; i < len; i++)
 			    {
 			        write_byte(0);   
@@ -112,6 +116,8 @@ namespace coin {
 			{
 			    if (len > 0)
 			    {
+                    m_data.reserve(len);
+                    
 			        write_bytes(buf, len);
                     
                     m_read_ptr = m_data.size() > 0 ? &m_data[0] : 0;
@@ -259,6 +265,11 @@ namespace coin {
 			    }
 			}
 
+			void reserve(const std::size_t & len)
+			{
+                m_data.reserve(len);
+			}
+        
 			void resize(const std::size_t & len)
 			{
                 m_data.resize(len);
@@ -266,7 +277,10 @@ namespace coin {
 
 			void clear()
 			{
-			    m_data.clear();
+                std::vector<char> empty;
+                
+                m_data.swap(empty);
+
 			    m_read_ptr = 0;
 			}
 
@@ -313,12 +327,22 @@ namespace coin {
 
 			void write(void * data, const std::size_t & len)
 			{
+                /**
+                 * :TODO:Time these to see which is faster.
+                 */
+#if 1
+                m_data.insert(
+                    m_data.end(), reinterpret_cast<char *>(data),
+                    reinterpret_cast<char *>(data) + len
+                );
+#else
 				m_data.resize(m_data.size() + len);
 
                 if (m_data.size() > 0)
                 {
                     std::memcpy(&m_data[0] + m_data.size() - len, data, len);
                 }
+#endif
 			}
         
             /**

@@ -1,9 +1,9 @@
 /*
  * Copyright (c) 2013-2016 John Connor (BM-NC49AxAjcqVcF5jNPu85Rb8MJ2d9JqZt)
  *
- * This file is part of vanillacoin.
+ * This file is part of vcash.
  *
- * vanillacoin is free software: you can redistribute it and/or modify
+ * vcash is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License with
  * additional permissions to the one published by the Free Software
  * Foundation, either version 3 of the License, or (at your option)
@@ -103,6 +103,15 @@ namespace coin {
              * @param val The sha256.
              */
             void on_transaction_updated(const sha256 & val);
+        
+            /**
+             * Called when a transaction has been updated.
+             * @param height The height of the block the transaction is in.
+             * @param val The sha256.
+             */
+            void on_spv_transaction_updated(
+                const std::int32_t & height, const sha256 & hash_tx
+            );
         
             /**
              * Called when inventory has changed.

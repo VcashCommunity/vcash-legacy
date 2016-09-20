@@ -1,9 +1,9 @@
 /*
  * Copyright (c) 2013-2016 John Connor (BM-NC49AxAjcqVcF5jNPu85Rb8MJ2d9JqZt)
  *
- * This file is part of vanillacoin.
+ * This file is part of vcash.
  *
- * vanillacoin is free software: you can redistribute it and/or modify
+ * vcash is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License with
  * additional permissions to the one published by the Free Software
  * Foundation, either version 3 of the License, or (at your option)
@@ -477,12 +477,12 @@ key::secret_t key::get_secret(bool & compressed) const
     
     const BIGNUM * bn = EC_KEY_get0_private_key(m_EC_KEY);
     
-    auto num_bytes = BN_num_bytes(bn);
-    
     if (bn == 0)
     {
         throw std::runtime_error("EC_KEY_get0_private_key failed");
     }
+    
+    auto num_bytes = BN_num_bytes(bn);
     
     auto n = BN_bn2bin(bn, &ret[32 - num_bytes]);
     

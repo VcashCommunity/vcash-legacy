@@ -5,19 +5,22 @@ A decentralized currency for the internet.
 
 Dependencies:
 
-boost 1.53.0
-db-4.8.30
-openssl
+* boost 1.53.0
+* db-6.1.29.NC
+* openssl 1.0.1q
 
 Windows also requires miniupnpc but can be disabled by the use of USE_UPNP=0.
 
 The easiest way to build for Ubuntu or similar Linux distributions is by using the (azure) script:
 
-https://github.com/john-connor/azure-quickstart-templates/blob/master/vcash-on-ubuntu/build_vcash.sh From_Source
+https://github.com/john-connor/azure-quickstart-templates/blob/master/vcash-on-ubuntu/build_vcash.sh
+
+Usage:
+```curl -s https://raw.githubusercontent.com/john-connor/azure-quickstart-templates/master/vcash-on-ubuntu/build_vcash.sh | bash /dev/stdin From_Source```
 
 All other Linux distributions can use:
 
-https://github.com/xCoreDev/vcash-scripts/blob/master/build-linux.sh
+https://github.com/john-connor/vcash-scripts/blob/master/build-linux.sh
 
 or alternatively you can compile manually:
 

@@ -1,9 +1,9 @@
 /*
  * Copyright (c) 2013-2016 John Connor (BM-NC49AxAjcqVcF5jNPu85Rb8MJ2d9JqZt)
  *
- * This file is part of vanillacoin.
+ * This file is part of vcash.
  *
- * vanillacoin is free software: you can redistribute it and/or modify
+ * vcash is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License with
  * additional permissions to the one published by the Free Software
  * Foundation, either version 3 of the License, or (at your option)
@@ -44,6 +44,7 @@
 #include <coin/message.hpp>
 #include <coin/point_out.hpp>
 #include <coin/reward.hpp>
+#include <coin/script_checker_queue.hpp>
 #include <coin/stack_impl.hpp>
 #include <coin/tcp_connection.hpp>
 #include <coin/tcp_connection_manager.hpp>
@@ -289,6 +290,162 @@ void block::update_time(block_index & previous)
     );
 }
 
+block block::create_genesis()
+{
+    /**
+     * Genesis block creation.
+     */
+    std::string timestamp_quote =
+        "December 22, 2014 - New York Times calls for Cheney, "
+        "Bush officials to be investigated and prosecuted for "
+        "torture."
+    ;
+    
+    /**
+     * Allocate a new transaction.
+     */
+    transaction tx_new;
+    
+    /**
+     * Set the transaction time to the time of the start of the
+     * chain.
+     */
+    tx_new.set_time(constants::chain_start_time);
+    
+    /**
+     * Allocate one input.
+     */
+    tx_new.transactions_in().resize(1);
+    
+    /**
+     * Allocate one output.
+     */
+    tx_new.transactions_out().resize(1);
+
+    /**
+     * Create the script signature.
+     */
+    auto script_signature =
+        script() << 486604799 << big_number(9999) <<
+        std::vector<std::uint8_t>(
+        (const std::uint8_t *)timestamp_quote.c_str(),
+        (const std::uint8_t *)timestamp_quote.c_str() +
+        timestamp_quote.size()
+    );
+
+    /**
+     * Set the script signature on the input.
+     */
+    tx_new.transactions_in()[0].set_script_signature(
+        script_signature
+    );
+    
+    /**
+     * Set the output to empty.
+     */
+    tx_new.transactions_out()[0].set_empty();
+
+    /**
+     * Allocate the genesis block.
+     */
+    block blk;
+    
+    /**
+     * Add the transactions.
+     */
+    blk.transactions().push_back(tx_new);
+    
+    /**
+     * There is no previous block.
+     */
+    blk.header().hash_previous_block = 0;
+    
+    /**
+     * Build the merkle tree.
+     */
+    blk.header().hash_merkle_root = blk.build_merkle_tree();
+    
+    /**
+     * Set the header version.
+     */
+    blk.header().version = 1;
+    
+    /**
+     * Set the header timestamp.
+     */
+    blk.header().timestamp = constants::chain_start_time;
+    
+    /**
+     * Set the header bits.
+     */
+    blk.header().bits =
+        constants::proof_of_work_limit.get_compact()
+    ;
+    
+    assert(blk.header().bits == 504365055);
+    
+    /**
+     * The test network uses a different genesis block by using a
+     * different nonce.
+     */
+    if (constants::test_net == true)
+    {
+        /**
+         * Set the header nonce.
+         */
+        blk.header().nonce =
+            constants::chain_start_time - 10000 + 1
+        ;
+    }
+    else
+    {
+        /**
+         * Set the header nonce.
+         */
+        blk.header().nonce = constants::chain_start_time - 10000;
+    }
+
+    /**
+     * Print the block.
+     */
+    blk.print();
+
+    log_debug(
+        "Block hash = " << blk.get_hash().to_string() << "."
+    );
+    log_debug(
+        "Block header hash merkle root = " <<
+        blk.header().hash_merkle_root.to_string() << "."
+    );
+    log_debug(
+        "Block header time = " << blk.header().timestamp << "."
+    );
+    log_debug(
+        "Block header nonce = " << blk.header().nonce << "."
+    );
+
+    /**
+     * Check the merkle root hash.
+     */
+    assert(
+        blk.header().hash_merkle_root ==
+        sha256("e6dc22fdcfcbffccb14cacfab0f0af67721d38f2929d8344cb"
+        "1635ac400e2e68")
+        
+    );
+    
+    /**
+     * Check the genesis block hash.
+     */
+    assert(
+        blk.get_hash() ==
+        (constants::test_net ? block::get_hash_genesis_test_net() :
+        block::get_hash_genesis())
+    );
+    
+    return blk;
+}
+
 std::shared_ptr<block> block::create_new(
     const std::shared_ptr<wallet> & w, const bool & proof_of_stake
     )
@@ -392,7 +549,7 @@ std::shared_ptr<block> block::create_new(
     
     /**
      * Limit to betweeen 1000 and block::get_maximum_size_median220()
-     *  - 1000 for sanity.
+     * - 1000 for sanity.
      */
     max_size = std::max(
         static_cast<std::size_t> (1000),
@@ -745,9 +902,7 @@ std::shared_ptr<block> block::create_new(
         
         sig_ops += tx.get_p2sh_sig_op_count(inputs);
 
-        if (
-            block_sig_ops + sig_ops >= block::get_maximum_size_median220() / 50
-            )
+        if (block_sig_ops + sig_ops >= block::get_maximum_size_median220() / 50)
         {
             continue;
         }
@@ -909,9 +1064,7 @@ std::shared_ptr<block> block::create_new(
     return ret;
 }
 
-bool block::disconnect_block(
-    db_tx & tx_db, const std::shared_ptr<block_index> & index
-    )
+bool block::disconnect_block(db_tx & tx_db, block_index * index)
 {
     /**
      * Disconnect in reverse order.
@@ -960,10 +1113,16 @@ bool block::disconnect_block(
 }
 
 bool block::connect_block(
-    db_tx & tx_db, const std::shared_ptr<block_index> & pindex,
-    const bool  & check_only
+    db_tx & tx_db, block_index * pindex, const bool  & check_only
     )
 {
+    if (globals::instance().state() != globals::state_started)
+    {
+        log_error("Block, not connecting because state != state_started.");
+    
+        return false;
+    }
+    
     try
     {
         /**
@@ -1012,6 +1171,11 @@ bool block::connect_block(
     }
 
     std::map<sha256, transaction_index> queued_changes;
+  
+    /**
+     * Allocate the script_checker_queue:context.
+     */
+    script_checker_queue::context script_checker_queue_context;
     
     std::int64_t fees = 0;
     std::int64_t value_in = 0;
@@ -1107,20 +1271,44 @@ bool block::connect_block(
                 fees += tx_value_in - tx_value_out;
             }
             
+            /**
+             * Allocate container to hold all scripts to be verified by the
+             * script_checker_queue.
+             */
+            std::vector<script_checker> script_checker_checks;
+
             if (
                 i.connect_inputs(tx_db, inputs, queued_changes,
                 tx_position_this, pindex, true, false,
-                strict_pay_to_script_hash) == false
+                strict_pay_to_script_hash, true,
+                &script_checker_checks) == false
                 )
             {
                 return false;
             }
+            
+            /**
+             * Insert the scripts to be check by the script_checker_queue.
+             */
+            script_checker_queue_context.insert(script_checker_checks);
         }
 
         queued_changes[hash_tx] = transaction_index(
             tx_position_this,
             static_cast<std::uint32_t> (i.transactions_out().size())
         );
+    }
+    
+    /**
+     * Wait for all scripts to be checked by the script_checker_queue.
+     */
+    if (script_checker_queue_context.sync_wait() == false)
+    {
+        log_error(
+            "Block connect failed, one of the scripts failed validation."
+        );
+        
+        return false;
     }
     
     /**
@@ -1326,7 +1514,7 @@ bool block::check_block(
     encode();
     
     /**
-     * Get the length.
+     * Get the size.
      */
     auto length = size();
     
@@ -1492,7 +1680,23 @@ bool block::check_block(
             return false;
         }
     }
-
+#if 0 /** Commented out in the original code. */
+    /**
+     * Check the coinbase timestamp.
+     */
+    if (
+        m_header.timestamp > m_transactions[0].time() +
+        constants::max_clock_drift
+        )
+    {
+        log_error(
+            "Block failed to check coinbase timestamp because it "
+            "is too early."
+        );
+         
+        return false;
+    }
+#endif
     /**
      * Check coinstake timestamp.
      */
@@ -2044,7 +2248,7 @@ bool block::check_block(
 }
 
 bool block::read_from_disk(
-    const std::shared_ptr<block_index> & index, const bool & read_transactions
+    const block_index * index, const bool & read_transactions
     )
 {
     if (read_transactions == false)
@@ -2080,6 +2284,13 @@ bool block::accept_block(
     {
         log_debug("Block, not accepting because state != state_started.");
     
+        return false;
+    }
+    
+    if (globals::instance().is_client_spv() == true)
+    {
+        log_debug("Block, not accepting because we are an SPV client.");
+        
         return false;
     }
     
@@ -2517,6 +2728,13 @@ bool block::write_to_disk(
     /**
      * :TODO: Do not allow empty pruned block files to be created.
      */
+
+    if (globals::instance().state() != globals::state_started)
+    {
+        log_error("Block, not writing to disk because state != state_started.");
+    
+        return false;
+    }
      
     /**
      * Open history file to append.
@@ -2613,9 +2831,7 @@ bool block::write_to_disk(
     return true;
 }
 
-bool block::set_best_chain(
-    db_tx & tx_db, std::shared_ptr<block_index> & index_new
-    )
+bool block::set_best_chain(db_tx & tx_db, block_index * index_new)
 {
     auto block_hash = get_hash();
 
@@ -2641,7 +2857,7 @@ bool block::set_best_chain(
             return false;
         }
         
-        stack_impl::get_block_index_genesis() = index_new;
+        stack_impl::set_block_index_genesis(index_new);
     }
     else if (
         m_header.hash_previous_block == globals::instance().hash_best_chain()
@@ -2665,7 +2881,7 @@ bool block::set_best_chain(
         /**
          * List of blocks that need to be connected afterwards.
          */
-        std::vector< std::shared_ptr<block_index> > index_secondary;
+        std::vector<block_index *> index_secondary;
 
         /**
          * Reorganization is costly in terms of database load because it works
@@ -2760,7 +2976,7 @@ bool block::set_best_chain(
      * New best block.
      */
     globals::instance().set_hash_best_chain(block_hash);
-    stack_impl::get_block_index_best() = index_new;
+    stack_impl::set_block_index_best(index_new);
     globals::instance().set_block_index_fbbh_last(0);
     globals::instance().set_best_block_height(
         stack_impl::get_block_index_best()->height()
@@ -2778,6 +2994,17 @@ bool block::set_best_chain(
         ", trust = " << stack_impl::get_best_chain_trust().to_string() <<
         ", date = " << stack_impl::get_block_index_best()->time() << "."
     );
+
+    if (globals::instance().best_block_height() % 500 == 0)
+    {
+        log_info(
+            "Block, set best chain, new best = " <<
+            globals::instance().hash_best_chain().to_string() <<
+            ", height = " << globals::instance().best_block_height() <<
+            ", trust = " << stack_impl::get_best_chain_trust().to_string() <<
+            ", date = " << stack_impl::get_block_index_best()->time() << "."
+        );
+    }
     
     log_debug(
         "Block, stake checkpoint = " <<
@@ -2828,6 +3055,13 @@ bool block::add_to_block_index(
     const std::uint32_t & file_index, const std::uint32_t & block_position
     )
 {
+    if (globals::instance().state() != globals::state_started)
+    {
+        log_error("Block, not adding to index because state != state_started.");
+    
+        return false;
+    }
+    
     /**
      * Check for duplicate.
      */
@@ -2846,9 +3080,7 @@ bool block::add_to_block_index(
     /**
      * Construct new block index.
      */
-    auto index_new = std::make_shared<block_index>(
-        file_index, block_position, *this
-    );
+    auto index_new = new block_index(file_index, block_position, *this);
     
     if (index_new == 0)
     {
@@ -3031,9 +3263,7 @@ bool block::add_to_block_index(
     return true;
 }
 
-bool block::set_best_chain_inner(
-    db_tx & tx_db, const std::shared_ptr<block_index> & index_new
-    )
+bool block::set_best_chain_inner(db_tx & tx_db, block_index * index_new)
 {
     if (
         connect_block(tx_db, index_new) == false ||
@@ -3057,7 +3287,7 @@ bool block::set_best_chain_inner(
     /**
      * Add to current best branch.
      */
-    index_new->block_index_previous()->block_index_next() = index_new;
+    index_new->block_index_previous()->set_block_index_next(index_new);
 
     /**
      * Delete redundant memory transactions.
@@ -3070,7 +3300,7 @@ bool block::set_best_chain_inner(
     return true;
 }
 
-void block::invalid_chain_found(const std::shared_ptr<block_index> & index_new)
+void block::invalid_chain_found(const block_index * index_new)
 {
     if (index_new->chain_trust() > stack_impl::get_best_invalid_trust())
     {
@@ -3079,7 +3309,7 @@ void block::invalid_chain_found(const std::shared_ptr<block_index> & index_new)
         db_tx().write_best_invalid_trust(stack_impl::get_best_invalid_trust());
     }
 
-    log_debug(
+    log_info(
         "Block, invalid chain found, invalid block = " <<
         index_new->get_block_hash().to_string().substr(0, 20) <<
         ", height = " << index_new->height() <<
@@ -3087,7 +3317,7 @@ void block::invalid_chain_found(const std::shared_ptr<block_index> & index_new)
         ", date = " << index_new->time() << "."
     );
 
-    log_debug(
+    log_info(
         "Block, invalid chain found, current block = " <<
         globals::instance().hash_best_chain().to_string().substr(0, 20) <<
         ", height = " << globals::instance().best_block_height() <<
@@ -3292,14 +3522,25 @@ std::size_t block::get_maximum_size_median220()
     /**
      * (SPV) clients do not have a maximum block size.
      */
+    if (globals::instance().is_client_spv() == true)
+    {
+        return std::numeric_limits<std::size_t>::max();
+    }
+
+    /**
+     * Skip size limit on checking blocks before the last blockchain
+     * checkpoint or during initial download.
+     */
     if (
-        globals::instance().operation_mode() ==
-        protocol::operation_mode_client &&
-        globals::instance().is_client() == true
+        globals::instance().best_block_height() <
+        checkpoints::instance().get_total_blocks_estimate() ||
+        utility::is_initial_block_download() == true
         )
     {
         return std::numeric_limits<std::size_t>::max();
     }
+    
+    return std::numeric_limits<std::size_t>::max();
     
     /**
      * 128 Kilobytes
@@ -3314,7 +3555,7 @@ std::size_t block::get_maximum_size_median220()
     /**
      * Get the last block_index.
      */
-    const auto * index = stack_impl::get_block_index_best().get();
+    const auto * index = stack_impl::get_block_index_best();
     
     static median_filter<std::size_t> g_median_filter(
         blocks_to_go_back, minimum_maximum_size
@@ -3331,65 +3572,72 @@ std::size_t block::get_maximum_size_median220()
         }
     }
 
-    static std::recursive_mutex g_mutex_last_block_indexes;
+    static block_index * g_block_index_last = 0;
     
-    std::lock_guard<std::recursive_mutex> l1(g_mutex_last_block_indexes);
-
-    static std::map<const block_index *, std::size_t> g_last_block_indexes;
-    
-    auto it = g_last_block_indexes.begin();
-    
-    while (it != g_last_block_indexes.end())
+    if (g_block_index_last != index)
     {
-        if (
-            1 + globals::instance().best_block_height() -
-            it->first->height() > blocks_to_go_back
-            )
-        {
-            it = g_last_block_indexes.erase(it);
-        }
-        else
-        {
-            ++it;
-        }
-    }
+        g_block_index_last = const_cast<block_index *> (index);
+        
+        static std::recursive_mutex g_mutex_last_block_indexes;
+        
+        std::lock_guard<std::recursive_mutex> l1(g_mutex_last_block_indexes);
 
-    /**
-     * Go back by what we want to be median size worth of blocks.
-     */
-    for (auto i = 0; index && i < blocks_to_go_back; i++)
-    {
-        if (g_last_block_indexes.count(index) > 0)
+        static std::map<const block_index *, std::size_t> g_last_block_indexes;
+        
+        auto it = g_last_block_indexes.begin();
+        
+        while (it != g_last_block_indexes.end())
         {
-            g_median_filter.input(g_last_block_indexes[index]);
-        }
-        else
-        {
-            /**
-             * Allocate the block.
-             */
-            block blk;
-            
-            /**
-             * Read the block from disk.
-             */
             if (
-                blk.read_from_disk(index->file(),
-                index->block_position()) == true
+                1 + globals::instance().best_block_height() -
+                it->first->height() > blocks_to_go_back
                 )
             {
-                /**
-                 * Encode to obtain the size in bytes.
-                 */
-                blk.encode();
-
-                g_last_block_indexes[index] = blk.size();
-                
-                g_median_filter.input(blk.size());
+                it = g_last_block_indexes.erase(it);
+            }
+            else
+            {
+                ++it;
             }
         }
-        
-        index = index->block_index_previous().get();
+
+        /**
+         * Go back by what we want to be median size worth of blocks.
+         */
+        for (auto i = 0; index && i < blocks_to_go_back; i++)
+        {
+            if (g_last_block_indexes.count(index) > 0)
+            {
+                g_median_filter.input(g_last_block_indexes[index]);
+            }
+            else
+            {
+                /**
+                 * Allocate the block.
+                 */
+                block blk;
+                
+                /**
+                 * Read the block from disk.
+                 */
+                if (
+                    blk.read_from_disk(index->file(),
+                    index->block_position()) == true
+                    )
+                {
+                    /**
+                     * Encode to obtain the size in bytes.
+                     */
+                    blk.encode();
+
+                    g_last_block_indexes[index] = blk.size();
+                    
+                    g_median_filter.input(blk.size());
+                }
+            }
+            
+            index = index->block_index_previous();
+        }
     }
 
     /**

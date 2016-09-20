@@ -1,9 +1,9 @@
 /*
  * Copyright (c) 2013-2016 John Connor (BM-NC49AxAjcqVcF5jNPu85Rb8MJ2d9JqZt)
  *
- * This file is part of vanillacoin.
+ * This file is part of vcash.
  *
- * vanillacoin is free software: you can redistribute it and/or modify
+ * vcash is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License with
  * additional permissions to the one published by the Free Software
  * Foundation, either version 3 of the License, or (at your option)
@@ -35,7 +35,29 @@
 #include <coin/logger.hpp>
 #include <coin/utility.hpp>
 
+static void errcall(const DbEnv *, const char * arg1, const char * arg2)
+{
+    if (arg1 && arg2)
+    {
+        log_error(
+            "Database environment, arg1 = " << arg1 << ", arg2 = " << arg2
+        );
+    }
+    
+    if (arg1)
+    {
+        log_error("Database environment, arg1 = " << arg1 << ".");
+    }
+
+    if (arg2)
+    {
+        log_error("Database environment, arg2 = " << arg2 << ".");
+    }
+}
+
 using namespace coin;
+
+std::recursive_mutex db_env::g_mutex_DbEnv;
 
 db_env::db_env()
     : m_DbEnv(DB_CXX_NO_EXCEPTIONS)
@@ -49,7 +71,7 @@ db_env::~db_env()
     close_DbEnv();
 }
 
-bool db_env::open(const std::uint32_t & cache_size)
+bool db_env::open(const std::int32_t & cache_size)
 {
     if (state_ == state_closed)
     {
@@ -76,17 +98,49 @@ bool db_env::open(const std::uint32_t & cache_size)
             DB_INIT_TXN | DB_THREAD | DB_RECOVER
         ;
 
-        std::lock_guard<std::recursive_mutex> l1(m_mutex_DbEnv);
+        if (globals::instance().is_client_spv() == true)
+        {
+            flags |= DB_PRIVATE;
+        }
+        else if (true)
+        {
+#if (! defined _MSC_VER)
+#warning :TODO: This needs to be in configuration, on by default
+#endif // _MSC_VER
+            flags |= DB_PRIVATE;
+        }
         
+        std::lock_guard<std::recursive_mutex> l1(g_mutex_DbEnv);
+        
+        /**
+         * set_lg_dir
+         */
         m_DbEnv.set_lg_dir(log_path.c_str());
-        m_DbEnv.set_cachesize(
-            cache_size / 1024, (cache_size % 1024) * 1048576, 1
-        );
-        m_DbEnv.set_lg_bsize(1048576);
-        m_DbEnv.set_lg_max(10485760);
-        m_DbEnv.set_lk_max_locks(537000);
-        m_DbEnv.set_lk_max_objects(40000);
-        m_DbEnv.set_errfile(fopen(errfile_path.c_str(), "a"));
+        
+        /**
+         * Configure according to the cache size.
+         */
+        if (cache_size == 1)
+        {
+            m_DbEnv.set_cachesize(0, 0x100000, 1);
+            m_DbEnv.set_lg_bsize(0x10000);
+            m_DbEnv.set_lg_max(1048576);
+            m_DbEnv.set_lk_max_locks(10000);
+            m_DbEnv.set_lk_max_objects(10000);
+        }
+        else
+        {
+            m_DbEnv.set_cachesize(
+                cache_size / 1024, (cache_size % 1024) * 1048576, 1
+            );
+            m_DbEnv.set_lg_bsize(1048576);
+            m_DbEnv.set_lg_max(10485760);
+            m_DbEnv.set_lk_max_locks(537000);
+            m_DbEnv.set_lk_max_objects(10000);
+        }
+        
+        m_DbEnv.set_errfile(0);
+        m_DbEnv.set_errcall(&errcall);
         m_DbEnv.set_flags(DB_AUTO_COMMIT, 1);
         m_DbEnv.set_flags(DB_TXN_WRITE_NOSYNC, 1);
         m_DbEnv.log_set_config(DB_LOG_AUTO_REMOVE, 1);
@@ -121,7 +175,7 @@ void db_env::close_DbEnv()
     {
         state_ = state_closed;
         
-        std::lock_guard<std::recursive_mutex> l1(m_mutex_DbEnv);
+        std::lock_guard<std::recursive_mutex> l1(g_mutex_DbEnv);
         
         auto ret = m_DbEnv.close(0);
         
@@ -161,7 +215,7 @@ bool db_env::remove_Db(const std::string & file_name)
 {
     this->close_Db(file_name);
 
-    std::lock_guard<std::recursive_mutex> l1(m_mutex_DbEnv);
+    std::lock_guard<std::recursive_mutex> l1(g_mutex_DbEnv);
     
     int ret = m_DbEnv.dbremove(0, file_name.c_str(), 0, DB_AUTO_COMMIT);
     
@@ -174,7 +228,7 @@ bool db_env::verify(const std::string & file_name)
     
     assert(m_file_use_counts.count(file_name) == 0);
 
-    std::lock_guard<std::recursive_mutex> l2(m_mutex_DbEnv);
+    std::lock_guard<std::recursive_mutex> l2(g_mutex_DbEnv);
     
     Db db(&m_DbEnv, 0);
     
@@ -193,7 +247,7 @@ bool db_env::salvage(
     
     assert(m_file_use_counts.count(file_name) == 0);
 
-    std::lock_guard<std::recursive_mutex> l2(m_mutex_DbEnv);
+    std::lock_guard<std::recursive_mutex> l2(g_mutex_DbEnv);
     
     std::uint32_t flags = DB_SALVAGE;
     
@@ -244,14 +298,14 @@ bool db_env::salvage(
 
 void db_env::checkpoint_lsn(const std::string & file_name)
 {
-    std::lock_guard<std::recursive_mutex> l2(m_mutex_DbEnv);
+    std::lock_guard<std::recursive_mutex> l2(g_mutex_DbEnv);
     
     m_DbEnv.txn_checkpoint(0, 0, 0);
 
     m_DbEnv.lsn_reset(file_name.c_str(), 0);
 }
 
-void db_env::flush()
+void db_env::flush(const bool & detach_db)
 {
     if (state_ == state_opened)
     {
@@ -281,11 +335,9 @@ void db_env::flush()
                     "Database environment checkpoint " << file_name << "."
                 );
                 
-                std::lock_guard<std::recursive_mutex> l2(m_mutex_DbEnv);
+                std::lock_guard<std::recursive_mutex> l2(g_mutex_DbEnv);
                 
                 m_DbEnv.txn_checkpoint(0, 0, 0);
-                
-                static bool detach_db = true;
                 
                 if (
                     utility::is_chain_file(file_name) == false || detach_db
@@ -314,7 +366,7 @@ void db_env::flush()
             {
                 char ** list;
                 
-                std::lock_guard<std::recursive_mutex> l3(m_mutex_DbEnv);
+                std::lock_guard<std::recursive_mutex> l3(g_mutex_DbEnv);
                 
                 m_DbEnv.log_archive(&list, DB_ARCH_REMOVE);
                 
@@ -326,7 +378,7 @@ void db_env::flush()
 
 DbEnv & db_env::get_DbEnv()
 {
-    std::lock_guard<std::recursive_mutex> l1(m_mutex_DbEnv);
+    std::lock_guard<std::recursive_mutex> l1(g_mutex_DbEnv);
     
     return m_DbEnv;
 }
@@ -347,14 +399,14 @@ std::map<std::string, Db *> & db_env::Dbs()
 
 std::recursive_mutex & db_env::mutex_DbEnv()
 {
-    return m_mutex_DbEnv;
+    return g_mutex_DbEnv;
 }
 
 DbTxn * db_env::txn_begin(int flags)
 {
     DbTxn * ptr = 0;
     
-    std::lock_guard<std::recursive_mutex> l1(m_mutex_DbEnv);
+    std::lock_guard<std::recursive_mutex> l1(g_mutex_DbEnv);
     
     int ret = m_DbEnv.txn_begin(0, &ptr, flags);
     

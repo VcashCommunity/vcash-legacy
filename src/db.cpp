@@ -1,9 +1,9 @@
 /*
  * Copyright (c) 2013-2016 John Connor (BM-NC49AxAjcqVcF5jNPu85Rb8MJ2d9JqZt)
  *
- * This file is part of vanillacoin.
+ * This file is part of vcash.
  *
- * vanillacoin is free software: you can redistribute it and/or modify
+ * vcash is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License with
  * additional permissions to the one published by the Free Software
  * Foundation, either version 3 of the License, or (at your option)
@@ -56,6 +56,11 @@ db::db(const std::string & file_name, const std::string & file_mode
     {
         flags |= DB_CREATE;
     }
+    
+    /**
+     * Make sure no other threads can access the db_env for this scope.
+     */
+    std::lock_guard<std::recursive_mutex> l1(db_env::mutex_DbEnv());
     
     if (stack_impl::get_db_env()->open() == false)
     {
@@ -127,10 +132,10 @@ void db::close()
         
         if (m_DbTxn)
         {
-            m_DbTxn->abort();
-        
-            m_DbTxn = 0;
+            m_DbTxn->abort(), m_DbTxn = 0;
         }
+        
+        m_Db = 0;
         
         /**
          * Flush database activity from memory pool to disk log.
@@ -154,15 +159,23 @@ void db::close()
         {
             minutes = 5;
         }
-        
-        /**
-         * -dblogsize
-         */
-        stack_impl::get_db_env()->get_DbEnv().txn_checkpoint(
-            minutes ? 100 * 1024 : 0, minutes, 0
-        );
 
-        --stack_impl::get_db_env()->file_use_counts()[m_file_name];
+        /**
+         * Make sure no other threads can access the db_env for this scope.
+         */
+        std::lock_guard<std::recursive_mutex> l1(db_env::mutex_DbEnv());
+    
+        if (stack_impl::get_db_env())
+        {
+            /**
+             * -dblogsize
+             */
+            stack_impl::get_db_env()->get_DbEnv().txn_checkpoint(
+                minutes ? 100 * 1024 : 0, minutes, 0
+            );
+
+            --stack_impl::get_db_env()->file_use_counts()[m_file_name];
+        }
     }
 }
 

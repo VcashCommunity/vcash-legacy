@@ -1,9 +1,9 @@
 /*
  * Copyright (c) 2013-2016 John Connor (BM-NC49AxAjcqVcF5jNPu85Rb8MJ2d9JqZt)
  *
- * This file is part of vanillacoin.
+ * This file is part of vcash.
  *
- * vanillacoin is free software: you can redistribute it and/or modify
+ * vcash is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License with
  * additional permissions to the one published by the Free Software
  * Foundation, either version 3 of the License, or (at your option)
@@ -22,6 +22,7 @@
 #define COIN_NETWORK_HPP
 
 #include <clocale>
+#include <cstdint>
 #include <ctime>
 #include <map>
 #include <mutex>
@@ -118,16 +119,23 @@ namespace coin {
             }
         
             /**
-             * Bans an address for 24 hours.
+             * Bans an address for seconds.
              * @param addr The address.
+             * @param seconds The seconds.
              */
-            void ban_address(const std::string & addr)
+            void ban_address(
+                const std::string & addr,
+                const std::uint32_t & seconds = 24 * 60 * 60
+                )
             {
                 std::lock_guard<std::mutex> l1(mutex_);
                 
-                log_info("Network is banning address " << addr << ".");
+                log_info(
+                    "Network is banning address " << addr << ", for " <<
+                    seconds / 60 / 60 << " hours."
+                );
                 
-                m_banned_addresses[addr] = std::time(0) + 24 * 60 * 60;
+                m_banned_addresses[addr] = std::time(0) + seconds;
             }
         
             /**

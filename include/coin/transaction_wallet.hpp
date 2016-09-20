@@ -1,9 +1,9 @@
 /*
  * Copyright (c) 2013-2016 John Connor (BM-NC49AxAjcqVcF5jNPu85Rb8MJ2d9JqZt)
  *
- * This file is part of vanillacoin.
+ * This file is part of vcash.
  *
- * vanillacoin is free software: you can redistribute it and/or modify
+ * vcash is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License with
  * additional permissions to the one published by the Free Software
  * Foundation, either version 3 of the License, or (at your option)
@@ -123,6 +123,11 @@ namespace coin {
             void add_supporting_transactions(db_tx & tx_db);
         
             /**
+             * Adds supporting transactions.
+             */
+            void spv_add_supporting_transactions();
+        
+            /**
              * Accepts a wallet transaction.
              * @param tx_db The db_tx.
              */
@@ -235,23 +240,20 @@ namespace coin {
             );
         
             /**
-             * Relays a zerotime_lock for the wallet transaction.
+             * Relays a wallet transaction.
              * @param connection_manager The tcp_connection_manager.
-             * @param use_udp If true it will be broadcast over UDP.
              */
-            void relay_wallet_zerotime_lock(
+            void spv_relay_wallet_transaction(
                 const std::shared_ptr<tcp_connection_manager> &
-                connection_manager, const bool & use_udp
+                connection_manager
             );
         
             /**
              * Relays a zerotime_lock for the wallet transaction.
-             * @param tx_db The db_tx.
              * @param connection_manager The tcp_connection_manager.
              * @param use_udp If true it will be broadcast over UDP.
              */
             void relay_wallet_zerotime_lock(
-                db_tx & tx_db,
                 const std::shared_ptr<tcp_connection_manager> &
                 connection_manager, const bool & use_udp
             );

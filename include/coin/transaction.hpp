@@ -1,9 +1,9 @@
 /*
  * Copyright (c) 2013-2016 John Connor (BM-NC49AxAjcqVcF5jNPu85Rb8MJ2d9JqZt)
  *
- * This file is part of vanillacoin.
+ * This file is part of vcash.
  *
- * vanillacoin is free software: you can redistribute it and/or modify
+ * vcash is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License with
  * additional permissions to the one published by the Free Software
  * Foundation, either version 3 of the License, or (at your option)
@@ -36,6 +36,8 @@
 
 namespace coin {
     
+    class script_checker;
+    
     /**
      * Implements a transaction.
      */
@@ -59,12 +61,12 @@ namespace coin {
              * The number confirmations.
              */
             enum { confirmations = 3 };
-        
+    
             /**
              * The maximum encoded size in bytes.
              */
             enum { maxmimum_length = 300000 };
-    
+        
             /**
              * Constructor
              */
@@ -264,16 +266,20 @@ namespace coin {
              * @param[in] create_new_block True if called from create_new_block.
              * @param[in] strict_pay_to_script_hash	true if fully validating
              * p2sh transactions.
+             * @param check_signature If true we check the signature.
+             * @param script_checker_checks If non-null we skip signature
+             * checking and let the script_checker_queue handle it.
              */
             bool connect_inputs(
                 db_tx & txdb,
                 std::map<sha256, std::pair<transaction_index, transaction> > & inputs,
                 std::map<sha256, transaction_index> & test_pool,
                 const transaction_position & position_this_tx,
-                const std::shared_ptr<block_index> & ptr_block_index,
+                const block_index * ptr_block_index,
                 const bool & connect_block, const bool & create_new_block,
                 const bool & strict_pay_to_script_hash = true,
-                const bool & check_signature = true
+                const bool & check_signature = true,
+                std::vector<script_checker> * script_checker_checks = 0
             );
         
             /**

@@ -1,9 +1,9 @@
 /*
  * Copyright (c) 2013-2016 John Connor (BM-NC49AxAjcqVcF5jNPu85Rb8MJ2d9JqZt)
  *
- * This file is part of vanillacoin.
+ * This file is part of vcash.
  *
- * vanillacoin is free software: you can redistribute it and/or modify
+ * vcash is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License with
  * additional permissions to the one published by the Free Software
  * Foundation, either version 3 of the License, or (at your option)
@@ -25,6 +25,7 @@
 #include <coin/data_buffer.hpp>
 #include <coin/db_env.hpp>
 #include <coin/db_wallet.hpp>
+#include <coin/hd_configuration.hpp>
 #include <coin/key_wallet.hpp>
 #include <coin/key_wallet_master.hpp>
 #include <coin/stack_impl.hpp>
@@ -35,12 +36,12 @@
 using namespace coin;
 
 std::uint64_t db_wallet::g_accounting_entry_number = 0;
+std::uint32_t db_wallet::g_wallet_updated = 0;
 
 db_wallet::db_wallet(
     const std::string & file_name, const std::string & file_mode
     )
     : db(file_name, file_mode)
-    , m_wallet_updated(0)
 {
     // ...
 }
@@ -450,7 +451,7 @@ bool db_wallet::backup(const wallet & w, const std::string & root_path)
              */
             if (
                 filesystem::copy_file(filesystem::data_path() + "wallet.dat",
-                "/sdcard/Android/data/net.vanillacoin.vanillacoin/wallet.dat"
+                "/sdcard/Android/data/net.vcash.vcash/wallet.dat"
                 ) == true
                 )
             {
@@ -840,9 +841,43 @@ bool db_wallet::read_key_value(
     }
     else if (type == "orderposnext")
     {
-        std::int64_t order_position_next = buffer_value.read_int64();
+        auto order_position_next = buffer_value.read_int64();
         
         w.set_order_position_next(order_position_next);
+    }
+    else if (type == "timestamp")
+    {
+        auto timestamp = buffer_value.read_int64();
+        
+        w.set_timestamp(timestamp);
+    }
+    else if (type == "hdconfiguration")
+    {
+        hd_configuration hd_config;
+
+        /**
+         * Read the (unused) length.
+         */
+        buffer_value.read_var_int();
+        
+        if (hd_config.decode(buffer_value) == true)
+        {
+            if (
+                globals::instance().wallet_main()->set_hd_configuration(
+                hd_config, false) == false
+                )
+            {
+                err = "set_hd_configuration failed";
+                
+                return false;
+            }
+        }
+        else
+        {
+            err = "decode hdconfiguration failed";
+                
+            return false;
+        }
     }
 
     return true;
@@ -850,7 +885,7 @@ bool db_wallet::read_key_value(
 
 bool db_wallet::write_name(const std::string & addr, const std::string & name)
 {
-    m_wallet_updated++;
+    g_wallet_updated++;
     
     return write(std::make_pair(std::string("name"), addr), name);
 }
@@ -913,7 +948,7 @@ bool db_wallet::write_account(const std::string & name, account & acct)
 
 bool db_wallet::erase_tx(const sha256 & val)
 {
-    m_wallet_updated++;
+    g_wallet_updated++;
     
     std::string key_prefix = "tx";
     
@@ -929,21 +964,28 @@ bool db_wallet::erase_tx(const sha256 & val)
 
 bool db_wallet::write_tx(const sha256 & val, transaction_wallet & tx_w)
 {
-    m_wallet_updated++;
+    g_wallet_updated++;
     
     return write(std::make_pair(std::string("tx"), val), tx_w);
 }
 
 bool db_wallet::write_orderposnext(const std::int64_t & value)
 {
-    m_wallet_updated++;
+    g_wallet_updated++;
     
     return write(std::string("orderposnext"), value);
 }
 
+bool db_wallet::write_timestamp(const std::time_t & value)
+{
+    g_wallet_updated++;
+    
+    return write(std::string("timestamp"), value);
+}
+
 bool db_wallet::write_defaultkey(const key_public & value)
 {
-    m_wallet_updated++;
+    g_wallet_updated++;
     
     return write(std::string("defaultkey"), value.bytes());
 }
@@ -952,7 +994,7 @@ bool db_wallet::write_key(
     const key_public & pub_key, const key::private_t & pri_key
     )
 {
-    m_wallet_updated++;
+    g_wallet_updated++;
     
     return write(
         std::make_pair(std::string("key"), pub_key.bytes()), pri_key, false
@@ -965,7 +1007,7 @@ bool db_wallet::write_crypted_key(
     const bool & erase_unencrypted_key
     )
 {
-    m_wallet_updated++;
+    g_wallet_updated++;
     
     if (
         write(std::make_pair(std::string("ckey"), pub_key.bytes()),
@@ -988,14 +1030,14 @@ bool db_wallet::write_master_key(
     const std::uint32_t & id, const key_wallet_master & key_master
     )
 {
-    m_wallet_updated++;
+    g_wallet_updated++;
     
     return write(std::make_pair(std::string("mkey"), id), key_master, true);
 }
 
 bool db_wallet::write_c_script(const ripemd160 & h, const script & script_redeem)
 {
-    m_wallet_updated++;
+    g_wallet_updated++;
     
     return write(
         std::make_pair(std::string("cscript"), h), script_redeem, false
@@ -1009,7 +1051,7 @@ bool db_wallet::read_bestblock(block_locator & val)
 
 bool db_wallet::write_bestblock(const block_locator & val)
 {
-    m_wallet_updated++;
+    g_wallet_updated++;
     
     return write(std::string("bestblock"), val);
 }
@@ -1029,14 +1071,14 @@ bool db_wallet::read_pool(const std::int64_t & pool, key_pool & keypool)
 
 bool db_wallet::write_pool(const std::int64_t & pool, key_pool & keypool)
 {
-    m_wallet_updated++;
+    g_wallet_updated++;
     
     return write(std::make_pair(std::string("pool"), pool), keypool);
 }
 
 bool db_wallet::erase_pool(const std::int64_t & pool)
 {
-    m_wallet_updated++;
+    g_wallet_updated++;
 
     std::string key_prefix = "pool";
     
@@ -1105,6 +1147,22 @@ bool db_wallet::write_accounting_entry(
 bool db_wallet::write_accounting_entry(accounting_entry & entry)
 {
     return write_accounting_entry(++g_accounting_entry_number, entry);
+}
+
+bool db_wallet::write_hd_configuration(const hd_configuration & val)
+{
+    g_wallet_updated++;
+    
+    data_buffer buffer;
+    
+    val.encode(buffer);
+    
+    std::vector<std::uint8_t> bytes(
+        reinterpret_cast<std::uint8_t *> (buffer.data()),
+        reinterpret_cast<std::uint8_t *> (buffer.data()) + buffer.size()
+    );
+    
+    return write(std::string("hdconfiguration"), bytes);
 }
 
 std::int64_t db_wallet::get_account_credit_debit(const std::string & account)
@@ -1242,6 +1300,11 @@ void db_wallet::list_account_credit_debit(
 
         ptr_cursor->close();
     }
+}
+
+const std::uint32_t & db_wallet::wallet_updated()
+{
+    return g_wallet_updated;
 }
 
 bool db_wallet::is_key_type(const std::string & type)

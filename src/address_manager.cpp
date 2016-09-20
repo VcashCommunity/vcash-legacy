@@ -1,9 +1,9 @@
 /*
  * Copyright (c) 2013-2016 John Connor (BM-NC49AxAjcqVcF5jNPu85Rb8MJ2d9JqZt)
  *
- * This file is part of vanillacoin.
+ * This file is part of vcash.
  *
- * vanillacoin is free software: you can redistribute it and/or modify
+ * vcash is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License with
  * additional permissions to the one published by the Free Software
  * Foundation, either version 3 of the License, or (at your option)
@@ -30,8 +30,10 @@
 #include <coin/address_manager.hpp>
 #include <coin/database_stack.hpp>
 #include <coin/data_buffer.hpp>
+#include <coin/globals.hpp>
 #include <coin/hash.hpp>
 #include <coin/incentive_answer.hpp>
+#include <coin/incentive_collaterals.hpp>
 #include <coin/filesystem.hpp>
 #include <coin/logger.hpp>
 #include <coin/message.hpp>
@@ -513,7 +515,8 @@ void address_manager::save()
      * Write the new.
      */
     for (
-        auto it = address_info_map_.begin(); it != address_info_map_.end(); ++it
+        auto it = address_info_map_.begin();
+        it != address_info_map_.end(); ++it
         )
     {
         if (nids == number_new_)
@@ -562,7 +565,8 @@ void address_manager::save()
      * Write the tried.
      */
     for (
-        auto it = address_info_map_.begin(); it != address_info_map_.end(); ++it
+        auto it = address_info_map_.begin();
+        it != address_info_map_.end(); ++it
         )
     {
         if (nids == number_tried_)
@@ -663,6 +667,73 @@ void address_manager::save()
      * Close the file.
      */
     ofs.close();
+}
+
+bool address_manager::handle_message(
+    const boost::asio::ip::tcp::endpoint & ep, message & msg
+    )
+{
+    std::lock_guard<std::recursive_mutex> l1(mutex_);
+    
+    if (msg.header().command == "icols")
+    {
+        if (globals::instance().is_incentive_enabled())
+        {
+            /**
+             * Get the incentive_collaterals.
+             */
+            auto icols = msg.protocol_icols().icols;
+            
+            if (icols)
+            {
+                for (auto & i : icols->collaterals())
+                {                    
+                    /**
+                     * If we do not have a recent good endpoint matching the
+                     * collateral address add it.
+                     */
+                    if (m_recent_good_endpoints.count(i.addr) == 0)
+                    {
+                        recent_endpoint_t recent;
+                        
+                        recent.addr = i.addr;
+                        recent.wallet_address = i.wallet_address;
+                        recent.public_key = i.public_key;
+                        recent.tx_in = i.tx_in;
+                        
+                        recent.time =
+                            std::time(0) + std::rand() % (5 * 60)
+                        ;
+                        recent.protocol_version = i.protocol_version;
+                        recent.protocol_version_user_agent =
+                            i.protocol_version_user_agent
+                        ;
+                        recent.protocol_version_services =
+                            i.protocol_version_services
+                        ;
+                        recent.protocol_version_start_height =
+                            i.protocol_version_start_height
+                        ;
+                        
+                        m_recent_good_endpoints[i.addr] = recent;
+                        
+                        boost::asio::ip::tcp::endpoint ep(
+                            i.addr.ipv4_mapped_address(), i.addr.port
+                        );
+                    
+                        /**
+                         * Set that the endpoint was probed.
+                         */
+                        probed_endpoints_[ep] =
+                            std::time(0) + std::rand() % (5 * 60)
+                        ;
+                    }
+                }
+            }
+        }
+    }
+    
+    return true;
 }
 
 address_manager::address_info_t * address_manager::find(
@@ -1309,6 +1380,17 @@ std::vector<address_manager::recent_endpoint_t>
     return ret;
 }
 
+void address_manager::print()
+{
+    log_debug("m_recent_good_endpoints = " << m_recent_good_endpoints.size());
+    log_debug("key_ = " << key_.size());
+    log_debug("address_info_map_ = " << address_info_map_.size());
+    log_debug("network_address_map_ = " << network_address_map_.size());
+    log_debug("buckets_new_ = " << buckets_new_.size());
+    log_debug("buckets_tried_ = " << buckets_tried_.size());
+    log_debug("probed_endpoints_ = " << probed_endpoints_.size());
+}
+
 std::int32_t address_manager::select_tried(const std::uint32_t & bucket_index)
 {
     std::lock_guard<std::recursive_mutex> l1(mutex_);
@@ -1475,7 +1557,13 @@ void address_manager::tick(const boost::system::error_code & ec)
     {
         std::lock_guard<std::recursive_mutex> l1(mutex_);
         
-        if (utility::is_initial_block_download() == false)
+        auto is_initial_block_download =
+            globals::instance().is_client_spv() ?
+            utility::is_spv_initial_block_download() :
+            utility::is_initial_block_download()
+        ;
+        
+        if (is_initial_block_download == false)
         {
             /**
              * Only keep recent good endpoints that are less than N hours old.
@@ -1512,7 +1600,7 @@ void address_manager::tick(const boost::system::error_code & ec)
                 ;
             }
             
-            log_debug("Address manager recent good endpoints:\n" << ss.str());
+            log_info("Address manager recent good endpoints:\n" << ss.str());
             
             /**
              * If we have not been able to probe an endpoint after N hours
@@ -1533,7 +1621,7 @@ void address_manager::tick(const boost::system::error_code & ec)
             }
             
             /**
-             * If 30 minutes has elapsed the the node needs probing.
+             * If some time has elapsed then the node needs probing.
              */
             std::vector<boost::asio::ip::tcp::endpoint> endpoints;
             
@@ -1550,7 +1638,7 @@ void address_manager::tick(const boost::system::error_code & ec)
                     
                     if (probed_endpoints_.count(ep) > 0)
                     {
-                        if (std::time(0) - probed_endpoints_[ep] > (30 * 60))
+                        if (std::time(0) - probed_endpoints_[ep] >= (60 * 60))
                         {
                             endpoints.push_back(ep);
                         }
@@ -1568,7 +1656,7 @@ void address_manager::tick(const boost::system::error_code & ec)
 
             std::random_shuffle(endpoints.begin(), endpoints.end());
             
-            enum { max_probes_new = 64 };
+            enum { max_probes_new = 32 };
             
             if (endpoints.size() > max_probes_new)
             {
@@ -1585,7 +1673,7 @@ void address_manager::tick(const boost::system::error_code & ec)
                 
                 if (probed_endpoints_.count(ep) > 0)
                 {
-                    if (std::time(0) - probed_endpoints_[ep] > (30 * 60))
+                    if (std::time(0) - probed_endpoints_[ep] >= (60 * 60))
                     {
                         endpoints.push_back(ep);
                     }
@@ -1604,7 +1692,10 @@ void address_manager::tick(const boost::system::error_code & ec)
             
             std::random_shuffle(endpoints.begin(), endpoints.end());
 
-            enum { max_probes_total = 64 };
+            auto max_probes_total =
+                globals::instance().is_client_spv() == true ?
+                3 : max_probes_new
+            ;
             
             if (endpoints.size() > max_probes_total)
             {
@@ -1616,7 +1707,7 @@ void address_manager::tick(const boost::system::error_code & ec)
              */
             for (auto & i : m_recent_good_endpoints)
             {
-                if (std::time(0) - i.second.time > (30 * 60))
+                if (std::time(0) - i.second.time >= (60 * 60))
                 {
                     endpoints.push_back(
                         boost::asio::ip::tcp::endpoint(
@@ -1661,7 +1752,7 @@ void address_manager::tick(const boost::system::error_code & ec)
                 
                 if (probed_endpoints_.count(i) > 0)
                 {
-                    if (std::time(0) - probed_endpoints_[i] > (30 * 60))
+                    if (std::time(0) - probed_endpoints_[i] >= (60 * 60))
                     {
                         should_probe = true;
                     }
@@ -1878,7 +1969,9 @@ void address_manager::tick(const boost::system::error_code & ec)
             /**
              * The number of minimum good endpoints to maintain.
              */
-            enum { min_good_endpoints = 36 };
+            auto min_good_endpoints =
+                globals::instance().is_client_spv() == true ? 6 : 24
+            ;
             
             auto interval = 8;
             
@@ -1940,5 +2033,10 @@ void address_manager::tick(const boost::system::error_code & ec)
                 std::bind(&address_manager::tick, this, std::placeholders::_1))
             );
         }
+        
+        /**
+         * Print
+         */
+        print();
     }
 }

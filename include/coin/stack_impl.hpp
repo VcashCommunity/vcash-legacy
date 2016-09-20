@@ -1,9 +1,9 @@
 /*
  * Copyright (c) 2013-2016 John Connor (BM-NC49AxAjcqVcF5jNPu85Rb8MJ2d9JqZt)
  *
- * This file is part of vanillacoin.
+ * This file is part of vcash.
  *
- * vanillacoin is free software: you can redistribute it and/or modify
+ * vcash is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License with
  * additional permissions to the one published by the Free Software
  * Foundation, either version 3 of the License, or (at your option)
@@ -44,6 +44,7 @@ namespace coin {
     class alert_manager;
     class block;
     class block_index;
+    class block_merkle;
     class chainblender_manager;
     class database_stack;
     class db_env;
@@ -184,6 +185,11 @@ namespace coin {
             void rpc_send(const std::string & command_line);
         
             /**
+             * Rescans the chain.
+             */
+            void rescan_chain();
+            
+            /**
              * Sets the wallet.transaction.history.maximum
              * @param val The value.
              */
@@ -253,6 +259,17 @@ namespace coin {
             );
         
             /**
+             * Saves the (SPV) block_merkle's.
+             */
+            void spv_block_merkles_save();
+        
+            /**
+             * Loads the (SPV) block_merkle's.
+             * @param trys The number of recursive trys,
+             */
+            void spv_block_merkles_load(std::uint8_t & trys);
+        
+            /**
              * The configuration.
              */
             configuration & get_configuration();
@@ -313,16 +330,26 @@ namespace coin {
              * The incentive_manager.
              */
             std::shared_ptr<incentive_manager> & get_incentive_manager();
-        
+
+            /**
+             * The main std::recursive_mutex.
+             */
+            static std::recursive_mutex & mutex();
+
             /**
              * The db_env
              */
             static std::shared_ptr<db_env> & get_db_env();
         
             /**
+             * Set's the genesis block.
+             */
+            static void set_block_index_genesis(block_index * val);
+        
+            /**
              * The genesis block index.
              */
-            static std::shared_ptr<block_index> & get_block_index_genesis();
+            static block_index * get_block_index_genesis();
         
             /**
              * The seen stake.
@@ -332,9 +359,15 @@ namespace coin {
             > & get_seen_stake();
         
             /**
+             * Set's the best block index.
+             * @param val The block_index.
+             */
+            static void set_block_index_best(block_index * val);
+        
+            /**
              * The best block index.
              */
-            static std::shared_ptr<block_index> & get_block_index_best();
+            static block_index * get_block_index_best();
         
             /**
              * The best chain trust.
@@ -350,7 +383,7 @@ namespace coin {
              * Inserts a block index.
              * @param hash_block The hash of the block.
              */
-            static std::shared_ptr<block_index> insert_block_index(
+            static block_index * insert_block_index(
                 const sha256 & hash_block
             );
 
@@ -368,9 +401,7 @@ namespace coin {
              * The block difficulty.
              * index The block_index.
              */
-            double difficulty(
-                const std::shared_ptr<block_index> & index = 0
-            ) const;
+            double difficulty(block_index * index = 0) const;
 
             /**
              * Calculates the average network hashes per second based on the
@@ -400,6 +431,31 @@ namespace coin {
                 const std::map<std::string, std::string> & pairs
             );
         
+            /**
+             * Called when an (SPV) merkleblock is received.
+             * @param connection The tcp_connection.
+             * @param merkle_block The block_merkle.
+             * @param transactions_received The transactions we've received that
+             * match the current block_merkle's transaction hashes.
+             */
+            void on_spv_merkle_block(
+                const std::shared_ptr<tcp_connection> & connection,
+                block_merkle & merkle_block,
+                const std::vector<transaction> & transactions_received
+            );
+        
+            /**
+             * Sets the (SPV) block height with time and filtered transaction
+             * hashes.
+             * @param height The height.
+             * @param time The time.
+             @ @param hashes_tx The (matched) transaction hashes.
+             */
+            void set_spv_block_height(
+                const std::int32_t & height, const std::time_t & time,
+                const std::vector<sha256> & hashes_tx
+            );
+            
         private:
         
             /**
@@ -416,6 +472,12 @@ namespace coin {
              * Called periodically to inform about blockchain.
              */
             void on_status_blockchain();
+        
+            /**
+             * Called periodically to perform maintenance on the database
+             * environment.
+             */
+            void on_database_env();
         
             /**
              * The local endpoint.
@@ -491,6 +553,11 @@ namespace coin {
              * The incentive_manager.
              */
             std::shared_ptr<incentive_manager> m_incentive_manager;
+
+            /**
+             * The main std::recursive_mutex.
+             */
+            static std::recursive_mutex g_mutex;
         
             /**
              * The db_env
@@ -500,7 +567,7 @@ namespace coin {
             /**
              * The genesis block index.
              */
-            static std::shared_ptr<block_index> g_block_index_genesis;
+            static block_index * g_block_index_genesis;
         
             /**
              * The seen stake.
@@ -510,7 +577,7 @@ namespace coin {
             /**
              * The best block index.
              */
-            static std::shared_ptr<block_index> g_block_index_best;
+            static block_index * g_block_index_best;
         
             /**
              * The best chain trust.
@@ -605,13 +672,6 @@ namespace coin {
             std::recursive_mutex mutex_callback_;
         
             /**
-             * The wallet flush timer.
-             */
-            boost::asio::basic_waitable_timer<
-                std::chrono::steady_clock
-            > timer_wallet_flush_;
-        
-            /**
              * The block status timer.
              */
             boost::asio::basic_waitable_timer<
@@ -631,6 +691,20 @@ namespace coin {
             boost::asio::basic_waitable_timer<
                 std::chrono::steady_clock
             > timer_status_wallet_;
+        
+            /**
+             * The database environment timer.
+             */
+            boost::asio::basic_waitable_timer<
+                std::chrono::steady_clock
+            > timer_database_env_;
+        
+            /**
+             * The (SPV) block_merkle's save timer.
+             */
+            boost::asio::basic_waitable_timer<
+                std::chrono::steady_clock
+            > timer_block_merkles_save_;
     };
     
 } // namespace coin
