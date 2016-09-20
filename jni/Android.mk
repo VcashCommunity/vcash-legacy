@@ -25,7 +25,7 @@ LOCAL_C_INCLUDES := \
 	./include \
     ./database/include \
 	./deps/boost \
-	./deps/db/build_unix \
+	./deps/platforms/android/db/build_android \
 	./deps/openssl/include
 
 LOCAL_SRC_FILES := \
@@ -69,11 +69,16 @@ LOCAL_SRC_FILES := \
 	../src/globals.cpp \
 	../src/hash.cpp \
 	../src/hc256.cpp \
+	../src/hd_configuration.cpp \
+	../src/hd_ecdsa.cpp \
+	../src/hd_keychain.cpp \
 	../src/http_transport.cpp \
 	../src/incentive.cpp \
 	../src/incentive_answer.cpp \
+	../src/incentive_collaterals.cpp \
 	../src/incentive_manager.cpp \
 	../src/incentive_question.cpp \
+	../src/incentive_sync.cpp \
 	../src/incentive_vote.cpp \
 	../src/inventory_vector.cpp \
 	../src/kernel.cpp \
@@ -91,7 +96,6 @@ LOCAL_SRC_FILES := \
 	../src/mining.cpp \
 	../src/nat_pmp_client.cpp \
 	../src/nat_pmp.cpp \
-	../src/pbkdf2.cpp \
 	../src/point_in.cpp \
 	../src/point_out.cpp \
 	../src/reward.cpp \

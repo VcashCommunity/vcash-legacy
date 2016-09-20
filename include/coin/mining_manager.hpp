@@ -1,9 +1,9 @@
 /*
  * Copyright (c) 2013-2016 John Connor (BM-NC49AxAjcqVcF5jNPu85Rb8MJ2d9JqZt)
  *
- * This file is part of vanillacoin.
+ * This file is part of vcash.
  *
- * vanillacoin is free software: you can redistribute it and/or modify
+ * vcash is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License with
  * additional permissions to the one published by the Free Software
  * Foundation, either version 3 of the License, or (at your option)
@@ -119,9 +119,8 @@ namespace coin {
 
             /**
              * The main loop.
-             * @param is_proof_of_stake If true it is stake.
              */
-            void loop(const bool & is_proof_of_stake);
+            void loop();
         
             /**
              * The Proof-of-Stake timer handler.
@@ -171,8 +170,7 @@ namespace coin {
              * @param extra_nonce The extra nonce.
              */
             void increment_extra_nonce(
-                std::shared_ptr<block> & blk,
-                std::shared_ptr<block_index> & index_previous,
+                std::shared_ptr<block> & blk, block_index * index_previous,
                 std::uint32_t & extra_nonce
             );
         

@@ -1,9 +1,9 @@
 /*
  * Copyright (c) 2013-2016 John Connor (BM-NC49AxAjcqVcF5jNPu85Rb8MJ2d9JqZt)
  *
- * This file is part of vanillacoin.
+ * This file is part of vcash.
  *
- * vanillacoin is free software: you can redistribute it and/or modify
+ * vcash is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License with
  * additional permissions to the one published by the Free Software
  * Foundation, either version 3 of the License, or (at your option)
@@ -217,6 +217,8 @@ namespace coin {
             
         protected:
         
+            friend class rpc_connection;
+            
             /**
              * Set's up the socket for VoIP operation on iOS.
              */
@@ -230,7 +232,7 @@ namespace coin {
             /**
              * The boost::asio::strand.
              */
-            boost::asio::strand & strand_;
+            boost::asio::strand strand_;
 
             /**
              * The connect timeout timer.

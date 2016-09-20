@@ -1,9 +1,9 @@
 /*
  * Copyright (c) 2013-2016 John Connor (BM-NC49AxAjcqVcF5jNPu85Rb8MJ2d9JqZt)
  *
- * This file is part of vanillacoin.
+ * This file is part of vcash.
  *
- * vanillacoin is free software: you can redistribute it and/or modify
+ * vcash is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License with
  * additional permissions to the one published by the Free Software
  * Foundation, either version 3 of the License, or (at your option)
@@ -97,6 +97,12 @@ namespace coin {
             bool decode(data_buffer & buffer);
 
             /**
+             * Sets the type.
+             * @param val.
+             */
+            void set_type(const type_t & val);
+        
+            /**
              * The type.
              */
             const type_t & type() const;
@@ -130,6 +136,12 @@ namespace coin {
                 db_tx & tx_db, const inventory_vector & inv
             );
 
+            /**
+             * Checks if we already have the transaction.
+             * @param inv The inventory_vector.
+             */
+            static bool spv_already_have(const inventory_vector & inv);
+        
             /**
              * operator ==
              */

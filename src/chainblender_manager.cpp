@@ -1,9 +1,9 @@
 /*
  * Copyright (c) 2013-2016 John Connor (BM-NC49AxAjcqVcF5jNPu85Rb8MJ2d9JqZt)
  *
- * This file is part of vanillacoin.
+ * This file is part of vcash.
  *
- * vanillacoin is free software: you can redistribute it and/or modify
+ * vcash is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License with
  * additional permissions to the one published by the Free Software
  * Foundation, either version 3 of the License, or (at your option)
@@ -369,7 +369,7 @@ void chainblender_manager::connect(const boost::asio::ip::tcp::endpoint & ep)
                                     if (tcp_connection_)
                                     {
                                         tcp_connection_->send_cbbroadcast_message(
-                                            *cbbroadcast
+                                            cbbroadcast
                                         );
                                     }
                                 }
@@ -646,7 +646,7 @@ void chainblender_manager::connect(const boost::asio::ip::tcp::endpoint & ep)
                             if (tcp_connection_)
                             {
                                 tcp_connection_->send_cbbroadcast_message(
-                                    *cbbroadcast
+                                    cbbroadcast
                                 );
                             }
                         }
@@ -1087,7 +1087,7 @@ void chainblender_manager::connect(const boost::asio::ip::tcp::endpoint & ep)
                                                 if (tcp_connection_)
                                                 {
                                                     tcp_connection_->send_cbbroadcast_message(
-                                                        *cbbroadcast
+                                                        cbbroadcast
                                                     );
                                                 }
                                                 
@@ -1549,7 +1549,7 @@ void chainblender_manager::do_tick_ecdhe(const std::uint32_t & interval)
             if (tcp_connection_)
             {
                 tcp_connection_->send_cbbroadcast_message(
-                    *cbbroadcast
+                    cbbroadcast
                 );
             }
             
@@ -1867,7 +1867,7 @@ void chainblender_manager::do_tick_tx(const std::uint32_t & interval)
                     if (tcp_connection_)
                     {
                         tcp_connection_->send_cbbroadcast_message(
-                            *session_.chainblender_broadcast_type_tx
+                            session_.chainblender_broadcast_type_tx
                         );
                     }
                 }
@@ -1898,7 +1898,7 @@ void chainblender_manager::do_tick_tx(const std::uint32_t & interval)
                 if (tcp_connection_)
                 {
                     tcp_connection_->send_cbbroadcast_message(
-                        *session_.chainblender_broadcast_type_tx
+                        session_.chainblender_broadcast_type_tx
                     );
                 }
             }
@@ -2851,7 +2851,7 @@ void chainblender_manager::broadcast_signatures(
          */
         if (tcp_connection_)
         {
-            tcp_connection_->send_cbbroadcast_message(*cbbroadcast);
+            tcp_connection_->send_cbbroadcast_message(cbbroadcast);
         }
     }
 }

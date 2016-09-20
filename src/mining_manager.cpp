@@ -1,9 +1,9 @@
 /*
  * Copyright (c) 2013-2016 John Connor (BM-NC49AxAjcqVcF5jNPu85Rb8MJ2d9JqZt)
  *
- * This file is part of vanillacoin.
+ * This file is part of vcash.
  *
- * vanillacoin is free software: you can redistribute it and/or modify
+ * vcash is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License with
  * additional permissions to the one published by the Free Software
  * Foundation, either version 3 of the License, or (at your option)
@@ -117,7 +117,7 @@ void mining_manager::start_proof_of_work()
         for (auto i = 0; i < cores; i++)
         {
             auto thread = std::make_shared<std::thread> (
-                std::bind(&mining_manager::loop, this, false)
+                std::bind(&mining_manager::loop, this)
             );
             
             /**
@@ -279,7 +279,7 @@ const double & mining_manager::hashes_per_second() const
     return m_hashes_per_second;
 }
 
-void mining_manager::loop(const bool & is_proof_of_stake)
+void mining_manager::loop()
 {
     key_reserved reserve_key(*globals::instance().wallet_main());
     
@@ -287,9 +287,7 @@ void mining_manager::loop(const bool & is_proof_of_stake)
     
     while (
         ((m_state_pow == state_pow_starting ||
-        m_state_pow == state_pow_started) ||
-        ((m_state_pos == state_pos_starting ||
-        m_state_pos == state_pos_started) && is_proof_of_stake)) &&
+        m_state_pow == state_pow_started)) &&
         globals::instance().state() == globals::state_started
         )
     {
@@ -322,7 +320,7 @@ void mining_manager::loop(const bool & is_proof_of_stake)
          * Attempt to create a new block of transactions.
          */
         auto blk = block::create_new(
-            globals::instance().wallet_main(), is_proof_of_stake
+            globals::instance().wallet_main(), false
         );
         
         if (blk == 0)
@@ -337,52 +335,6 @@ void mining_manager::loop(const bool & is_proof_of_stake)
         auto index_previous = stack_impl::get_block_index_best();
     
         increment_extra_nonce(blk, index_previous, extra_nonce);
-
-        if (is_proof_of_stake)
-        {
-            /**
-             * If proof-of-stake block found then process it (ppcoin).
-             */
-            if (blk->is_proof_of_stake())
-            {
-                if (
-                    blk->sign(*globals::instance().wallet_main()
-                    ) == false)
-                {
-                    continue;
-                }
-
-                log_debug(
-                    "Mining manager found Proof-of-Stake block " <<
-                    blk->get_hash().to_string()
-                );
-
-                /**
-                 * Check the work.
-                 */
-                check_work(
-                    blk, globals::instance().wallet_main(), reserve_key,
-                    is_proof_of_stake
-                );
-            }
-            
-            /**
-             * We attempt to stake at most every 8 seconds.
-             */
-            for (auto i = 0; i < 16; i ++)
-            {
-                if (globals::instance().state() == globals::state_started)
-                {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                }
-                else
-                {
-                    break;
-                }
-            }
-            
-            continue;
-        }
         
         if (globals::instance().debug())
         {
@@ -440,9 +392,7 @@ void mining_manager::loop(const bool & is_proof_of_stake)
          */
         while (
             ((m_state_pow == state_pow_starting ||
-            m_state_pow == state_pow_started) ||
-            ((m_state_pos == state_pos_starting ||
-            m_state_pos == state_pos_started) && is_proof_of_stake)) &&
+            m_state_pow == state_pow_started)) &&
             globals::instance().state() == globals::state_started
             )
         {
@@ -496,7 +446,7 @@ void mining_manager::loop(const bool & is_proof_of_stake)
                      */
                     check_work(
                         blk, globals::instance().wallet_main(), reserve_key,
-                        is_proof_of_stake
+                        false
                     );
                     
                     break;
@@ -665,120 +615,138 @@ void mining_manager::pos_tick(const boost::system::error_code & ec)
     }
     else
     {
-        key_reserved reserve_key(*globals::instance().wallet_main());
-        
-        static std::uint32_t g_extra_nonce = 0;
-        
-        if (
-            (m_state_pos == state_pos_starting ||
-            m_state_pos == state_pos_started) &&
-            globals::instance().state() == globals::state_started
-            )
+        /**
+         * Spawn a detached thread.
+         */
+        std::thread([this]()
         {
+            auto start = std::chrono::system_clock::now();
+            
+            key_reserved reserve_key(*globals::instance().wallet_main());
+            
+            static std::uint32_t g_extra_nonce = 0;
+            
             if (
-                stack_impl_.get_tcp_connection_manager(
-                )->active_tcp_connections() <
-                stack_impl_.get_tcp_connection_manager(
-                )->minimum_tcp_connections() &&
+                (m_state_pos == state_pos_starting ||
+                m_state_pos == state_pos_started) &&
                 globals::instance().state() == globals::state_started
                 )
             {
-                log_info(
-                    "Mining manager is waiting on more network connections."
-                );
-            }
-            else if (
-                utility::is_initial_block_download() &&
-                globals::instance().state() == globals::state_started
-                )
-            {
-                log_info(
-                    "Mining manager is waiting on the blockchain to download."
-                );
-            }
-            else if (
-                globals::instance().wallet_main()->is_locked() &&
-                globals::instance().state() == globals::state_started
-                )
-            {
-                log_info("Mining manager, wallet is locked.");
-            }
-            else
-            {
-                /**
-                 * Attempt to create a new block of transactions.
-                 */
-                auto blk = block::create_new(
-                    globals::instance().wallet_main(), true
-                );
-                
-                if (blk)
+                if (
+                    stack_impl_.get_tcp_connection_manager(
+                    )->active_tcp_connections() <
+                    stack_impl_.get_tcp_connection_manager(
+                    )->minimum_tcp_connections() &&
+                    globals::instance().state() == globals::state_started
+                    )
                 {
-                    if (globals::instance().debug())
-                    {
-                        /**
-                         * Encode the block to determine the size.
-                         */
-                        data_buffer buffer;
-                        
-                        blk->encode(buffer);
-                        
-                        log_info(
-                            "Mining manager, mining (pos) with " <<
-                            blk->transactions().size() <<
-                            " transactions in block, bytes = " <<
-                            buffer.size() << "."
-                        );
-                    }
-                    
-                    auto index_previous = stack_impl::get_block_index_best();
-                
-                    increment_extra_nonce(blk, index_previous, g_extra_nonce);
-
+                    log_info(
+                        "Mining manager is waiting on more network "
+                        "connections."
+                    );
+                }
+                else if (
+                    utility::is_initial_block_download() &&
+                    globals::instance().state() == globals::state_started
+                    )
+                {
+                    log_info(
+                        "Mining manager is waiting on the blockchain "
+                        "to download."
+                    );
+                }
+                else if (
+                    globals::instance().wallet_main()->is_locked() &&
+                    globals::instance().state() == globals::state_started
+                    )
+                {
+                    log_info("Mining manager, wallet is locked.");
+                }
+                else
+                {
                     /**
-                     * If proof-of-stake block found then process it (ppcoin).
+                     * Attempt to create a new block of transactions.
                      */
-                    if (blk->is_proof_of_stake())
+                    auto blk = block::create_new(
+                        globals::instance().wallet_main(), true
+                    );
+                    
+                    if (blk)
                     {
-                        if (
-                            blk->sign(*globals::instance().wallet_main()
-                            ) == false)
+                        if (globals::instance().debug())
                         {
-                            // ..
-                        }
-                        else
-                        {
-                            log_info(
-                                "Mining manager found Proof-of-Stake block " <<
-                                blk->get_hash().to_string()
-                            );
-
                             /**
-                             * Check the work.
+                             * Encode the block to determine the size.
                              */
-                            check_work(
-                                blk, globals::instance().wallet_main(),
-                                reserve_key, true
+                            data_buffer buffer;
+                            
+                            blk->encode(buffer);
+                            
+                            log_info(
+                                "Mining manager, mining (pos) with " <<
+                                blk->transactions().size() <<
+                                " transactions in block, bytes = " <<
+                                buffer.size() << "."
                             );
+                        }
+                        
+                        auto index_previous =
+                            stack_impl::get_block_index_best()
+                        ;
+                    
+                        increment_extra_nonce(
+                            blk, index_previous, g_extra_nonce
+                        );
+
+                        /**
+                         * If proof-of-stake block found then process it.
+                         */
+                        if (blk->is_proof_of_stake())
+                        {
+                            if (
+                                blk->sign(*globals::instance().wallet_main()
+                                ) == false)
+                            {
+                                // ..
+                            }
+                            else
+                            {
+                                log_info(
+                                    "Mining manager found Proof-of-Stake "
+                                    "block " << blk->get_hash().to_string()
+                                );
+
+                                /**
+                                 * Check the work.
+                                 */
+                                check_work(
+                                    blk, globals::instance().wallet_main(),
+                                    reserve_key, true
+                                );
+                            }
                         }
                     }
                 }
             }
-        }
-    
-        /**
-         * Peers use a 60 second stake search interval and clients use 64
-         * seconds.
-         */
-        auto interval =
-            globals::instance().operation_mode() ==
-            protocol::operation_mode_peer ? 60 : 64
-        ;
+            
+            std::chrono::duration<double> elapsed_seconds =
+                std::chrono::system_clock::now() - start
+            ;
+            
+            log_info(
+                "Mining manager Proof-of-Stake took " <<
+                elapsed_seconds.count() << " seconds."
+            );
+
+        }).detach();
         
-        timer_pos_.expires_from_now(std::chrono::seconds(interval));
-    	timer_pos_.async_wait(std::bind(
-			&mining_manager::pos_tick, this, std::placeholders::_1)
-    	);
+        /**
+         * Restart timer.
+         */
+        timer_pos_.expires_from_now(std::chrono::seconds(60));
+        timer_pos_.async_wait(std::bind(
+            &mining_manager::pos_tick, this, std::placeholders::_1)
+        );
     }
 }
 
@@ -853,31 +821,6 @@ void mining_manager::check_work(
         else
         {
             log_info("Mining manager processed block, accepted.");
-
-            if (blk->is_proof_of_stake() == true)
-            {
-                /**
-                 * The mismatch spent coins.
-                 */
-                std::int32_t mismatch_spent = 0;
-                
-                /**
-                 * The balance in question.
-                 */
-                std::int64_t balance_in_question = 0;
-
-                /**
-                 * The inputs have changed, fix them.
-                 */
-                globals::instance().wallet_main()->fix_spent_coins(
-                    mismatch_spent, balance_in_question, false
-                );
-                
-                log_debug(
-                    "Mining manager, mismatch_spent = " << mismatch_spent <<
-                    ", balance_in_question = " << balance_in_question << "."
-                );
-            }
             
             /**
              * If we are a client node broadcast the block to all connected
@@ -906,8 +849,8 @@ void mining_manager::check_work(
 }
 
 void mining_manager::increment_extra_nonce(
-    std::shared_ptr<block> & blk,
-    std::shared_ptr<block_index> & index_previous, std::uint32_t & extra_nonce
+    std::shared_ptr<block> & blk, block_index * index_previous,
+    std::uint32_t & extra_nonce
     )
 {
     static sha256 hash_previous;

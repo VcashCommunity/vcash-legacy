@@ -1,9 +1,9 @@
 /*
  * Copyright (c) 2013-2016 John Connor (BM-NC49AxAjcqVcF5jNPu85Rb8MJ2d9JqZt)
  *
- * This file is part of vanillacoin.
+ * This file is part of vcash.
  *
- * vanillacoin is free software: you can redistribute it and/or modify
+ * vcash is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License with
  * additional permissions to the one published by the Free Software
  * Foundation, either version 3 of the License, or (at your option)
@@ -36,6 +36,8 @@
 #include <coin/globals.hpp>
 #include <coin/hash.hpp>
 #include <coin/incentive_answer.hpp>
+#include <coin/incentive_collaterals.hpp>
+#include <coin/incentive_sync.hpp>
 #include <coin/incentive_question.hpp>
 #include <coin/incentive_vote.hpp>
 #include <coin/inventory_vector.hpp>
@@ -178,20 +180,23 @@ void message::encode()
         else if (m_header.command == "filterload")
         {
             /**
-             * We are not a BIP-0037 (lite client).
+             * Create the filterload.
              */
+            m_payload = create_filterload();
         }
         else if (m_header.command == "filteradd")
         {
             /**
-             * We are not a BIP-0037 (lite client).
+             * Create the filteradd.
              */
+            m_payload = create_filteradd();
         }
         else if (m_header.command == "filterclear")
         {
             /**
-             * We are not a BIP-0037 (lite client).
+             * Create the filterclear.
              */
+            m_payload = create_filterclear();
         }
         else if (m_header.command == "merkleblock")
         {
@@ -249,6 +254,20 @@ void message::encode()
              */
             m_payload = create_iquestion();
         }
+        else if (m_header.command == "isync")
+        {
+            /**
+             * Create the isync.
+             */
+            m_payload = create_isync();
+        }
+        else if (m_header.command == "icols")
+        {
+            /**
+             * Create the icols.
+             */
+            m_payload = create_icols();
+        }
         else if (m_header.command == "cbbroadcast")
         {
             /**
@@ -296,6 +315,19 @@ void message::encode()
      * @note We add one byte to the size for null-termination.
      */
     assert(m_header.command.size() + 1 <= 12);
+    
+    /**
+     * Check the command size is within bounds.
+     */
+    if (m_header.command.size() + 1 > 12)
+    {
+        log_error(
+            "Message encoding failed, header command (" << m_header.command <<
+            ") is too long, bytes = " << m_header.command.size() << "."
+        );
+        
+        return;
+    }
     
     /**
      * Write the header command.
@@ -361,7 +393,10 @@ void message::decode()
      */
     m_header.magic = read_uint32();
     
-    log_none("Message got header magic = " << m_header.magic << ".");
+    log_none(
+        "Message got header magic = " << m_header.magic << ", verified = " <<
+        verify_header_magic() << "."
+    );
     
     if (verify_header_magic() == false)
     {
@@ -673,9 +708,20 @@ void message::decode()
         }
         else if (m_header.command == "headers")
         {
-            /**
-             * :TODO: Implement for headers-first initial download.
-             */
+            auto count = read_var_int();
+            
+            if (count > 0)
+            {
+                for (auto i = 0; i < count; i++)
+                {
+                    block block_header;
+                    
+                    if (block_header.decode(*this, true) == true)
+                    {
+                        m_protocol_headers.headers.push_back(block_header);
+                    }
+                }
+            }
         }
         else if (m_header.command == "checkpoint")
         {
@@ -992,6 +1038,56 @@ void message::decode()
                 m_protocol_ivote.ivote.reset();
             }
         }
+        else if (m_header.command == "isync")
+        {
+            /**
+             * Allocate the ivote.
+             */
+            m_protocol_isync.isync = std::make_shared<incentive_sync> ();
+            
+            /**
+             * Decode the isync.
+             */
+            if (m_protocol_isync.isync->decode(*this))
+            {
+                // ...
+            }
+            else
+            {
+                log_error("Message failed to decode isync.");
+                
+                /**
+                 * Deallocate the isync.
+                 */
+                m_protocol_isync.isync.reset();
+            }
+        }
+        else if (m_header.command == "icols")
+        {
+            /**
+             * Allocate the icols.
+             */
+            m_protocol_icols.icols =
+                std::make_shared<incentive_collaterals> ()
+            ;
+            
+            /**
+             * Decode the icols.
+             */
+            if (m_protocol_icols.icols->decode(*this))
+            {
+                // ...
+            }
+            else
+            {
+                log_error("Message failed to decode icols.");
+                
+                /**
+                 * Deallocate the icols.
+                 */
+                m_protocol_icols.icols.reset();
+            }
+        }
         else if (m_header.command == "cbbroadcast")
         {
             /**
@@ -1280,6 +1376,16 @@ protocol::ivote_t & message::protocol_ivote()
     return m_protocol_ivote;
 }
 
+protocol::isync_t & message::protocol_isync()
+{
+    return m_protocol_isync;
+}
+
+protocol::icols_t & message::protocol_icols()
+{
+    return m_protocol_icols;
+}
+
 protocol::cbbroadcast_t & message::protocol_cbbroadcast()
 {
     return m_protocol_cbbroadcast;
@@ -1383,7 +1489,7 @@ data_buffer message::create_version()
     if (
         globals::instance().operation_mode() ==
         protocol::operation_mode_client &&
-        globals::instance().is_client() == true
+        globals::instance().is_client_spv() == true
         )
     {
         comments.push_back("SPV Client");
@@ -1432,7 +1538,20 @@ data_buffer message::create_version()
     /**
      * Set the payload start height.
      */
-    m_protocol_version.start_height = globals::instance().best_block_height();
+    if (globals::instance().is_client_spv() == true)
+    {
+        m_protocol_version.start_height =
+            globals::instance().spv_best_block_height() < 0 ? 0 :
+            globals::instance().spv_best_block_height()
+        ;
+    }
+    else
+    {
+        m_protocol_version.start_height =
+            globals::instance().best_block_height() < 0 ? 0 :
+            globals::instance().best_block_height()
+        ;
+    }
     
     /**
      * Set the nonce.
@@ -1773,6 +1892,44 @@ data_buffer message::create_block()
     return ret;
 }
 
+data_buffer message::create_filterload()
+{
+    data_buffer ret;
+    
+    if (m_protocol_filterload.filterload)
+    {
+        m_protocol_filterload.filterload->encode(ret);
+    }
+    
+    return ret;
+}
+
+data_buffer message::create_filteradd()
+{
+    data_buffer ret;
+    
+    ret.write_var_int(m_protocol_filteradd.filteradd.size());
+    
+    if (m_protocol_filteradd.filteradd.size() > 0)
+    {
+        ret.write_bytes(
+            reinterpret_cast<const char *> (&m_protocol_filteradd.filteradd[0]),
+            m_protocol_filteradd.filteradd.size()
+        );
+    }
+
+    return ret;
+}
+
+data_buffer message::create_filterclear()
+{
+    data_buffer ret;
+    
+    // ...
+    
+    return ret;
+}
+
 data_buffer message::create_merkleblock()
 {
     data_buffer ret;
@@ -1896,6 +2053,30 @@ data_buffer message::create_ivote()
     if (m_protocol_ivote.ivote)
     {
         m_protocol_ivote.ivote->encode(ret);
+    }
+    
+    return ret;
+}
+
+data_buffer message::create_isync()
+{
+    data_buffer ret;
+    
+    if (m_protocol_isync.isync)
+    {
+        m_protocol_isync.isync->encode(ret);
+    }
+    
+    return ret;
+}
+
+data_buffer message::create_icols()
+{
+    data_buffer ret;
+    
+    if (m_protocol_icols.icols)
+    {
+        m_protocol_icols.icols->encode(ret);
     }
     
     return ret;

@@ -1,9 +1,9 @@
 /*
  * Copyright (c) 2013-2016 John Connor (BM-NC49AxAjcqVcF5jNPu85Rb8MJ2d9JqZt)
  *
- * This file is part of vanillacoin.
+ * This file is part of vcash.
  *
- * vanillacoin is free software: you can redistribute it and/or modify
+ * vcash is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License with
  * additional permissions to the one published by the Free Software
  * Foundation, either version 3 of the License, or (at your option)
@@ -232,6 +232,16 @@ namespace coin {
             protocol::ivote_t & protocol_ivote();
         
             /**
+             * The protocol isync structure.
+             */
+            protocol::isync_t & protocol_isync();
+
+            /**
+             * The protocol icols structure.
+             */
+            protocol::icols_t & protocol_icols();
+        
+            /**
              * The protocol cbbroadcast structure.
              */
             protocol::cbbroadcast_t & protocol_cbbroadcast();
@@ -379,6 +389,16 @@ namespace coin {
             protocol::ivote_t m_protocol_ivote;
         
             /**
+             * The protocol isync structure.
+             */
+            protocol::isync_t m_protocol_isync;
+
+            /**
+             * The protocol icols structure.
+             */
+            protocol::icols_t m_protocol_icols;
+        
+            /**
              * The protocol cbbroadcast structure.
              */
             protocol::cbbroadcast_t m_protocol_cbbroadcast;
@@ -454,7 +474,22 @@ namespace coin {
              * Creates a block.
              */
             data_buffer create_block();
+ 
+            /**
+             * Creates a filterload.
+             */
+            data_buffer create_filterload();
         
+            /**
+             * Creates a filteradd.
+             */
+            data_buffer create_filteradd();
+        
+            /**
+             * Creates a filterclear.
+             */
+            data_buffer create_filterclear();
+  
             /**
              * Creates a merkleblock.
              */
@@ -504,6 +539,16 @@ namespace coin {
              * Creates an ivote.
              */
             data_buffer create_ivote();
+        
+            /**
+             * Creates an isync.
+             */
+            data_buffer create_isync();
+        
+            /**
+             * Creates an icols.
+             */
+            data_buffer create_icols();
         
             /**
              * Creates an cbbroadcast.

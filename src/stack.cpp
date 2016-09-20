@@ -1,9 +1,9 @@
 /*
  * Copyright (c) 2013-2016 John Connor (BM-NC49AxAjcqVcF5jNPu85Rb8MJ2d9JqZt)
  *
- * This file is part of vanillacoin.
+ * This file is part of vcash.
  *
- * vanillacoin is free software: you can redistribute it and/or modify
+ * vcash is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License with
  * additional permissions to the one published by the Free Software
  * Foundation, either version 3 of the License, or (at your option)
@@ -277,6 +277,14 @@ void stack::rpc_send(const std::string & command_line)
     if (stack_impl_)
     {
         stack_impl_->rpc_send(command_line);
+    }
+}
+
+void stack::rescan_chain()
+{
+    if (stack_impl_)
+    {
+        stack_impl_->rescan_chain();
     }
 }
 

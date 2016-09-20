@@ -1,9 +1,9 @@
 /*
  * Copyright (c) 2013-2016 John Connor (BM-NC49AxAjcqVcF5jNPu85Rb8MJ2d9JqZt)
  *
- * This file is part of vanillacoin.
+ * This file is part of vcash.
  *
- * vanillacoin is free software: you can redistribute it and/or modify
+ * vcash is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License with
  * additional permissions to the one published by the Free Software
  * Foundation, either version 3 of the License, or (at your option)
@@ -341,6 +341,15 @@ namespace coin {
                 const json_rpc_request_t & request
             );
         
+            /**
+             * Performs a database environment operation.
+             * @param request The json_rpc_request_t.
+             */
+            json_rpc_response_t json_databaseenv(
+                const json_rpc_request_t & request
+            );
+
+
             /**
              * Encodes databasefind data into JSON format.
              * @param request The json_rpc_request_t.

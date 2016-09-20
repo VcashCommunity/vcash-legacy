@@ -1,9 +1,9 @@
 /*
  * Copyright (c) 2013-2016 John Connor (BM-NC49AxAjcqVcF5jNPu85Rb8MJ2d9JqZt)
  *
- * This file is part of vanillacoin.
+ * This file is part of vcash.
  *
- * vanillacoin is free software: you can redistribute it and/or modify
+ * vcash is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License with
  * additional permissions to the one published by the Free Software
  * Foundation, either version 3 of the License, or (at your option)
@@ -37,6 +37,7 @@ namespace coin {
     class block_locator;
     class data_buffer;
     class db_env;
+    class hd_configuration;
     class key_pool;
     class key_public;
     class key_wallet_master;
@@ -175,6 +176,12 @@ namespace coin {
             bool write_orderposnext(const std::int64_t & value);
         
             /**
+             * Writes the timestamp.
+             * @param value The value.
+             */
+            bool write_timestamp(const std::time_t & value);
+        
+            /**
              * Writes the default key.
              * @param value the key_public.
              */
@@ -277,6 +284,12 @@ namespace coin {
             bool write_accounting_entry(accounting_entry & entry);
         
             /**
+             * Writes the hd_configuration.
+             * @param val The value.
+             */
+            bool write_hd_configuration(const hd_configuration & val);
+        
+            /**
              * Gets the given account's credit and debit.
              * @param account The account name.
              */
@@ -292,12 +305,17 @@ namespace coin {
                 std::list<accounting_entry> & entries
             );
         
+            /**
+             * The number of times the wallet has been updated.
+             */
+            static const std::uint32_t & wallet_updated();
+        
         private:
         
             /**
              * The number of times the wallet has been updated.
              */
-            std::uint32_t m_wallet_updated;
+            static std::uint32_t g_wallet_updated;
         
         protected:
         

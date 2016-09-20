@@ -1,9 +1,9 @@
 /*
  * Copyright (c) 2013-2016 John Connor (BM-NC49AxAjcqVcF5jNPu85Rb8MJ2d9JqZt)
  *
- * This file is part of vanillacoin.
+ * This file is part of vcash.
  *
- * vanillacoin is free software: you can redistribute it and/or modify
+ * vcash is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License with
  * additional permissions to the one published by the Free Software
  * Foundation, either version 3 of the License, or (at your option)
@@ -117,7 +117,48 @@ namespace coin {
              */
             int get_depth_in_main_chain(const bool & is_zerotime = true) const
             {
-                std::shared_ptr<block_index> index_out;
+                if (globals::instance().is_client_spv() == true)
+                {
+                    int ret = -1;
+                    
+                    ret =
+                        globals::instance().spv_best_block_height() -
+                        m_spv_block_height + 1
+                    ;
+                    
+                    if (m_spv_block_height <= 0)
+                    {
+                        ret = 0;
+                    }
+                    
+                    /**
+                     * ZeroTime protected transactions act as if they have a
+                     * single confirmation.
+                     */
+                    if (
+                        globals::instance().is_zerotime_enabled() && is_zerotime
+                        )
+                    {
+                        if (ret < 1)
+                        {
+                            if (
+                                zerotime::instance().confirmations()[
+                                get_hash()] >= globals::instance(
+                                ).zerotime_answers_minimum()
+                                )
+                            {
+                                /**
+                                 * Use the configured ZeroTime depth.
+                                 */
+                                ret = globals::instance().zerotime_depth();
+                            }
+                        }
+                    }
+                    
+                    return ret > -1 ? ret : 0;
+                }
+                
+                block_index * index_out = 0;
                 
                 return get_depth_in_main_chain(index_out, is_zerotime);
             }
@@ -129,8 +170,7 @@ namespace coin {
              * protected.
              */
             int get_depth_in_main_chain(
-                std::shared_ptr<block_index> & index_out,
-                const bool & is_zerotime
+                block_index * & index_out, const bool & is_zerotime
                 ) const
             {
                 auto ret = get_depth_in_main_chain_no_zerotime(index_out);
@@ -174,7 +214,7 @@ namespace coin {
              * @param index_out The block_index.
              */
             int get_depth_in_main_chain_no_zerotime(
-                std::shared_ptr<block_index> & index_out
+                block_index * & index_out
                 ) const
             {
                 int ret = -1;
@@ -259,7 +299,7 @@ namespace coin {
              */
             int set_merkle_branch(block * blk = 0)
             {
-                if (globals::instance().is_client())
+                if (globals::instance().is_client_spv() == true)
                 {
                     if (m_block_hash == 0)
                     {
@@ -395,6 +435,17 @@ namespace coin {
                 return m_index;
             }
         
+            /**
+             * Sets the (SPV) block height.
+             * @param val The value.
+             */
+            void set_spv_block_height(const std::int32_t & val);
+        
+            /**
+             * The (SPV) block height.
+             */
+            const std::int32_t & spv_block_height() const;
+        
         private:
         
             /**
@@ -417,6 +468,12 @@ namespace coin {
              */
             mutable bool m_merkle_verified;
     
+            /**
+             * Ths (SPV) block height.
+             * @note This is not an encoded/decoded variable.
+             */
+            std::int32_t m_spv_block_height;
+            
         protected:
         
             // ...

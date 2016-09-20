@@ -1,9 +1,9 @@
 /*
  * Copyright (c) 2013-2016 John Connor (BM-NC49AxAjcqVcF5jNPu85Rb8MJ2d9JqZt)
  *
- * This file is part of vanillacoin.
+ * This file is part of vcash.
  *
- * vanillacoin is free software: you can redistribute it and/or modify
+ * vcash is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License with
  * additional permissions to the one published by the Free Software
  * Foundation, either version 3 of the License, or (at your option)
@@ -36,6 +36,7 @@
 
 namespace coin {
 
+    class incentive_collaterals;
     class key;
     class key_public;
     class message;
@@ -90,7 +91,18 @@ namespace coin {
              * @param ivote The incentive_vote.
              */
             bool validate_collateral(const incentive_vote & ivote);
-        
+
+            /**
+             * Returns the incentive_collaterals objects.
+             * @param filter The wallet addresses to exclude.
+             * @param maximum_collaterals The maximum number of collaterals
+             * to include in the returned incentive_collaterals object.
+             */
+            std::shared_ptr<incentive_collaterals> get_incentive_collaterals(
+                const std::set<std::string> & filter,
+                const std::size_t & maximum_collaterals = 64
+            );
+
         private:
         
             /**

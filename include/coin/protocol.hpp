@@ -1,9 +1,9 @@
 /*
  * Copyright (c) 2013-2016 John Connor (BM-NC49AxAjcqVcF5jNPu85Rb8MJ2d9JqZt)
  *
- * This file is part of vanillacoin.
+ * This file is part of vcash.
  *
- * vanillacoin is free software: you can redistribute it and/or modify
+ * vcash is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License with
  * additional permissions to the one published by the Free Software
  * Foundation, either version 3 of the License, or (at your option)
@@ -43,7 +43,9 @@ class chainblender_join;
 class chainblender_leave;
 class chainblender_status;
 class incentive_answer;
+class incentive_collaterals;
 class incentive_question;
+class incentive_sync;
 class incentive_vote;
 class transaction;
 class transaction_bloom_filter;
@@ -57,7 +59,7 @@ namespace protocol {
         /**
          * The version.
          */
-        enum { version = 60050 };
+        enum { version = 60051 };
 
         /**
          * The minimum version.
@@ -643,7 +645,7 @@ namespace protocol {
             "ztlock",
             "ztvote",
             "ivote",
-#if 1 /* BIP-0037 */
+#if 1 /* BIP-0037 nonstandard */
             "filtered block nonstandard",
 #endif
             "unkown",
@@ -859,6 +861,22 @@ namespace protocol {
         {
             std::shared_ptr<incentive_question> iquestion;
         } iquestion_t;
+    
+        /**
+         * The isync structure.
+         */
+        typedef struct
+        {
+            std::shared_ptr<incentive_sync> isync;
+        } isync_t;
+
+        /**
+         * The icols structure.
+         */
+        typedef struct
+        {
+            std::shared_ptr<incentive_collaterals> icols;
+        } icols_t;
     
         /**
          * The cbjoin structure.

@@ -1,9 +1,9 @@
 /*
  * Copyright (c) 2013-2016 John Connor (BM-NC49AxAjcqVcF5jNPu85Rb8MJ2d9JqZt)
  *
- * This file is part of vanillacoin.
+ * This file is part of vcash.
  *
- * vanillacoin is free software: you can redistribute it and/or modify
+ * vcash is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License with
  * additional permissions to the one published by the Free Software
  * Foundation, either version 3 of the License, or (at your option)
@@ -73,8 +73,11 @@ namespace coin {
 
             /**
              * to_string
+             * @param include_version If true the version will be included.
              */
-            const std::string to_string() const;
+            const std::string to_string(
+                const bool & include_version = true
+            ) const;
 
             /**
              * compare_to

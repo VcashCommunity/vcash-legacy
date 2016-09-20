@@ -1,9 +1,9 @@
 /*
  * Copyright (c) 2013-2016 John Connor (BM-NC49AxAjcqVcF5jNPu85Rb8MJ2d9JqZt)
  *
- * This file is part of vanillacoin.
+ * This file is part of vcash.
  *
- * vanillacoin is free software: you can redistribute it and/or modify
+ * vcash is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License with
  * additional permissions to the one published by the Free Software
  * Foundation, either version 3 of the License, or (at your option)
@@ -320,9 +320,12 @@ bool base58::set_string(const std::string & value)
     return true;
 }
 
-const std::string base58::to_string() const
+const std::string base58::to_string(const bool & include_version) const
 {
-    std::vector<std::uint8_t> vch(1, m_version);
+    auto vch = include_version ?
+        std::vector<std::uint8_t> (1, m_version) :
+        std::vector<std::uint8_t> ()
+    ;
     
     vch.insert(vch.end(), m_data.begin(), m_data.end());
     
